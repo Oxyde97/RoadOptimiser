@@ -96,8 +96,14 @@
     body.map-open .map-shell { height: 46dvh; border-bottom-width: 1px; }
     @media (min-width: 768px) { .map-shell { height: auto; flex: 1 1 auto; overflow: visible; } }
 
-    /* Lisibilité tactile mobile : textes et zones de touch agrandis (!important gagne sur le CDN Tailwind) */
-    @media (max-width: 767px) {
+    /* Lisibilité tactile mobile : textes et zones de touch agrandis (!important gagne sur le CDN Tailwind)
+       2ᵉ branche : téléphone resté en « site desktop » (Chrome force ~980 px) — pointer:coarse le rattrape */
+    @media (max-width: 767px), (pointer: coarse) and (max-width: 1100px) {
+      .map-shell { height: 0 !important; flex: 0 0 auto !important; width: 100% !important; border: 0 !important; overflow: hidden; }
+      body.map-open .map-shell { height: 46dvh !important; border-bottom: 1px solid #e2e8f0 !important; }
+      #planner-view section { width: 100% !important; flex: 1 1 auto !important; }
+      header .sm\:hidden { display: flex !important; }
+      header div.hidden.sm\:flex:has(#active-date) { display: none !important; }
       #planner-view button, #planner-view a[role="button"] { min-height: 44px; }
       #planner-view .text-xs { font-size: 13.5px !important; line-height: 1.35; }
       #planner-view .text-\\[11px\\], #planner-view .text-\\[10px\\] { font-size: 12.5px !important; line-height: 1.35; }
