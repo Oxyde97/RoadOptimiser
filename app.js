@@ -17,7 +17,7 @@ import {
   getDriver, getStop, getDriverRoute, uid, minutesFromHHMM, isoAt,
   parseParcelBarcode,
 } from './storage.js';
-import { auth, api, mountLogin, logout } from './auth.js';
+import { auth, api, mountLogin, logout, requireGate, showGateAgain, resolveApi } from './auth.js';
 import { initDriverServerView } from './driver-server.js';
 import { geocode, route as routeRoad, matrix as routeMatrix, navigationLinks, estimateTour } from './routing.js';
 import { optimize, reoptimize, applyManualOrder, recomputeEtas, computeLoads } from './optimize.js';
@@ -1154,6 +1154,13 @@ function podRowHTML(field) {
 
 /* ============ v4 : COMPTES & BACK-OFFICE ============ */
 
+function doLogout() {
+  logout();
+  updateHeaderChip();
+  toast('Déconnecté du serveur.', 'info');
+  showGateAgain(() => { updateHeaderChip(); routeFromUrl(); });
+}
+
 function updateHeaderChip() {
   const chip = document.getElementById('user-chip');
   if (!chip) return;
@@ -1162,6 +1169,7 @@ function updateHeaderChip() {
     chip.hidden = false;
     chip.classList.remove('hidden');
     chip.innerHTML = `<i class="fa-solid ${u.role === 'admin' ? 'fa-user-shield text-amber-400' : 'fa-id-card text-brand-400'}"></i> ${escapeHtml(u.name)} <button type="button" data-action="acc-logout" class="ml-1 text-slate-400" title="Se déconnecter"><i class="fa-solid fa-right-from-bracket"></i></button>`;
+    chip.querySelector('[data-action="acc-logout"]').addEventListener('click', doLogout);
   } else {
     chip.hidden = true;
     chip.classList.add('hidden');
@@ -1727,7 +1735,7 @@ async function handlePanelClick(ev) {
     case 'add-stop': openStopModal(); break;
     case 'publish-day': publishDay(); break;
     case 'fetch-retours': fetchRetours(); break;
-    case 'acc-logout': logout(); updateHeaderChip(); if (activeTab === 'accounts') renderAccounts(); toast('Déconnecté du serveur.', 'info'); break;
+    case 'acc-logout': doLogout(); break;
     case 'acc-toggle': accAction('PATCH', btn.dataset.id, { active: btn.dataset.active !== '1' }); break;
     case 'acc-del': if (window.confirm('Supprimer définitivement le compte « ' + btn.dataset.name + ' » ?')) accAction('DELETE', btn.dataset.id, {}); break;
     case 'acc-reset': {
@@ -2110,9 +2118,17 @@ function routeFromUrl() {
 
 async function init() {
   bindHeader();
-  updateHeaderChip();
-  if (auth.online) { const r = await api('/me'); if (!r.ok) { auth.clear(); updateHeaderChip(); } else { auth.set(auth.token, r.data); updateHeaderChip(); } }
   bindPanel();
+  updateHeaderChip();
+  const qs = new URLSearchParams(location.search);
+  const isPublicLink = Boolean(qs.get('track') || qs.get('feedback'));
+  const gate = await requireGate({ publicBypass: isPublicLink });
+  updateHeaderChip();
+  if (!isPublicLink && gate.user && gate.user.role === 'admin') {
+    routeFromUrl();
+    switchTab('accounts');
+    return;
+  }
   routeFromUrl();
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('[app] Service Worker', err));

@@ -1,13 +1,14 @@
 /**
  * RoadOptimizur v4 — authentification & client API back-office
- * Origine de l'API = même origine que la page (servie par le conteneur Node).
- * En miroir LAN (Web Station / port 80), /api renvoie 404 → l'app degrade en mode local.
+ * Détection auto de l'API : même origine (/api) sinon, sur HTTP LAN, port 8080 direct.
+ * requireGate() impose l'identification plein écran avant toute utilisation (sauf liens clients).
  */
 import { uid } from './storage.js';
 
 const TOKEN_KEY = 'roadoptimizur.v4.token';
-const USER_KEY = 'roadopimizur.v4.user';
-const API = '/api';
+const USER_KEY = 'roadoptimizur.v4.user';
+let API = '/api';
+let API_RESOLVED = false;
 
 export const auth = {
   get token() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } },
@@ -18,6 +19,21 @@ export const auth = {
   clear() { try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch {} },
   get online() { return Boolean(this.token && this.user); },
 };
+
+/** Vérifie où l'API répond et mémorise la base. */
+export async function resolveApi() {
+  if (API_RESOLVED) return API;
+  const cands = ['/api'];
+  if (location.protocol === 'http:' && location.hostname) cands.push(location.protocol + '//' + location.hostname + ':8080/api');
+  for (const base of cands) {
+    try {
+      const res = await fetch(base + '/health', { method: 'GET' });
+      if (res.ok) { API = base; API_RESOLVED = true; return API; }
+    } catch {}
+  }
+  API = cands[0]; API_RESOLVED = true;
+  return API;
+}
 
 /** Requête API. Retourne {ok, status, data} — ne lève jamais. */
 export async function api(path, { method = 'GET', body = null, authRequired = true } = {}) {
@@ -43,13 +59,64 @@ export async function login(email, secret) {
 export function logout() { auth.clear(); }
 
 /**
- * Écran de connexion générique.
- * mount(el, { title, subtitle, onSuccess(user), mustChangeHint })
+ * Gate plein écran : bloque l'app tant que la session n'est pas valide.
+ * - Sans jeton : écran d'identification.
+ * - Jeton存 en mémoire : validation silencieuse /api/me, puis onSuccess(user).
+ * opts: { publicBypass:boolean — true pour les liens clients (ne gate jamais), onDone(user) }
+ */
+export async function requireGate(opts = {}) {
+  if (opts.publicBypass) return { ok: true, user: null };
+  await resolveApi();
+  if (auth.online) {
+    const r = await api('/me');
+    if (r.ok) { auth.set(auth.token, r.data); return { ok: true, user: r.data }; }
+    auth.clear();
+  }
+  await showGate(opts);
+  return { ok: true, user: auth.user };
+}
+
+function showGate(opts = {}) {
+  return new Promise((resolve) => {
+    let el = document.getElementById('auth-gate');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'auth-gate';
+      el.className = 'fixed inset-0 z-[200] bg-slate-900';
+      document.body.appendChild(el);
+    }
+    el.classList.remove('hidden');
+    el.innerHTML = '<div class="h-full overflow-y-auto" style="background:linear-gradient(160deg,#0f172a 0%,#1e293b 60%,#0f172a 100%)"><div id="auth-gate-inner"></div></div>';
+    const inner = el.querySelector('#auth-gate-inner');
+    mountLogin(inner, {
+      title: 'RoadOptimizur',
+      subtitle: 'Identification requise — conducteurs et dispatch.',
+      onSuccess: (user) => {
+        el.classList.add('hidden');
+        opts.onDone && opts.onDone(user);
+        resolve(user);
+      },
+    });
+    document.body.style.overflow = 'hidden';
+  });
+}
+
+export function hideGate() {
+  const el = document.getElementById('auth-gate');
+  if (el) { el.classList.add('hidden'); el.innerHTML = ''; }
+  document.body.style.overflow = '';
+}
+
+/** Affiche le gate par-dessus tout (logout, session expirée). */
+export function showGateAgain(onDone) { showGate({ onDone }); }
+
+/**
+ * Écran de connexion générique (utilisé par le gate et l'onglet Comptes).
  */
 export function mountLogin(el, opts = {}) {
   const id = 'lx-' + uid().slice(0, 6);
   el.innerHTML = `
-    <div class="min-h-full flex items-center justify-center p-4">
+    <div class="min-h-[80dvh] flex items-center justify-center p-4">
       <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg border border-slate-200 p-5">
         <div class="text-center mb-4">
           <div class="w-14 h-14 mx-auto rounded-2xl bg-slate-900 flex items-center justify-center mb-2"><i class="fa-solid fa-campground text-brand-400 text-xl"></i></div>
@@ -76,6 +143,7 @@ export function mountLogin(el, opts = {}) {
     errP.classList.add('hidden');
     const email = form.querySelector(`#${id}-e`).value.trim();
     const secret = form.querySelector(`#${id}-p`).value;
+    await resolveApi();
     const r = await login(email, secret);
     btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-right-to-bracket mr-2"></i>Se connecter';
     if (r.ok) { opts.onSuccess && opts.onSuccess(r.user, r.mustChange); }
