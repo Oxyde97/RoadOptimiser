@@ -3,7 +3,7 @@
  * Cache de la coquille applicative + CDN pour un usage hors-ligne.
  */
 
-const VERSION = 'roadoptimizur-v3-3';
+const VERSION = 'roadoptimizur-v3-4';
 const CORE = [
   './',
   './index.html',

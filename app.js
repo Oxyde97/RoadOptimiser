@@ -1841,6 +1841,26 @@ function bindHeader() {
   });
   document.getElementById('active-date')?.addEventListener('change', (ev) => setDate(ev.target.value));
   document.getElementById('active-date-mobile')?.addEventListener('change', (ev) => setDate(ev.target.value));
+
+  // Tiroir carte mobile (masqué par défaut, état persistant)
+  const mapBtn = document.getElementById('btn-map-toggle');
+  const syncMapBtn = () => {
+    const open = document.body.classList.contains('map-open');
+    if (!mapBtn) return;
+    mapBtn.setAttribute('aria-pressed', String(open));
+    mapBtn.classList.toggle('bg-brand-600', open);
+    mapBtn.classList.toggle('border-brand-500', open);
+    mapBtn.classList.toggle('text-white', open);
+  };
+  try { if (localStorage.getItem('roopt.mapOpen') === '1') document.body.classList.add('map-open'); } catch {}
+  syncMapBtn();
+  mapBtn?.addEventListener('click', () => {
+    const open = document.body.classList.toggle('map-open');
+    try { localStorage.setItem('roopt.mapOpen', open ? '1' : '0'); } catch {}
+    syncMapBtn();
+    setTimeout(() => { if (map) map.invalidateSize(); updateMap(); }, 300);
+  });
+
   document.getElementById('btn-export')?.addEventListener('click', () => { exportJSON(state); toast('Export JSON téléchargé.', 'success'); });
   document.getElementById('btn-print')?.addEventListener('click', printTour);
   document.getElementById('btn-install')?.addEventListener('click', () => {

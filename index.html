@@ -91,9 +91,23 @@
       font-weight: 800;
     }
 
-    /* Carte mobile : 38 % de la hauteur visible */
-    .map-shell { height: 38dvh; }
-    @media (min-width: 768px) { .map-shell { height: auto; flex: 1 1 auto; } }
+    /* Carte mobile : tiroir escamotable — masquée par défaut, le contenu prend tout l'écran */
+    .map-shell { height: 0; overflow: hidden; border-bottom-width: 0; transition: height .25s ease; }
+    body.map-open .map-shell { height: 46dvh; border-bottom-width: 1px; }
+    @media (min-width: 768px) { .map-shell { height: auto; flex: 1 1 auto; overflow: visible; } }
+
+    /* Lisibilité tactile mobile : textes et zones de touch agrandis (!important gagne sur le CDN Tailwind) */
+    @media (max-width: 767px) {
+      #planner-view button, #planner-view a[role="button"] { min-height: 44px; }
+      #planner-view .text-xs { font-size: 13.5px !important; line-height: 1.35; }
+      #planner-view .text-\\[11px\\], #planner-view .text-\\[10px\\] { font-size: 12.5px !important; line-height: 1.35; }
+      #planner-view .text-sm { font-size: 15px !important; }
+      #planner-view .font-semibold, #planner-view .font-bold { letter-spacing: .01em; }
+      #planner-view .min-h-\\[36px\\] { min-height: 44px !important; }
+      #planner-view .rounded-xl .flex.items-center.gap-2 span, #planner-view .truncate { font-size: 13.5px !important; }
+      #planner-tabs button { min-height: 46px !important; font-size: 13.5px !important; padding: 0 14px !important; }
+      header button, header label { min-width: 44px; }
+    }
 
     /* Impression */
     .print-only { display: none; }
@@ -146,11 +160,14 @@
         </div>
       </div>
 
-      <div class="sm:hidden px-3 pb-2">
-        <div class="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-2 h-9">
-          <i class="fa-regular fa-calendar text-[11px] text-slate-400"></i>
-          <input id="active-date-mobile" type="date" class="bg-transparent text-xs text-slate-100 outline-none flex-1">
+      <div class="sm:hidden px-3 pb-2 flex items-center gap-2">
+        <div class="flex-1 flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-2 h-11">
+          <i class="fa-regular fa-calendar text-[13px] text-slate-400"></i>
+          <input id="active-date-mobile" type="date" class="bg-transparent text-[14px] text-slate-100 outline-none flex-1 min-w-0">
         </div>
+        <button id="btn-map-toggle" type="button" class="flex-shrink-0 h-11 px-4 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-[13px] font-bold flex items-center gap-2 active:bg-slate-700" title="Afficher / masquer la carte" aria-pressed="false">
+          <i class="fa-solid fa-map-location-dot"></i> Carte
+        </button>
       </div>
 
       <nav id="planner-tabs" class="flex overflow-x-auto px-2 pb-2 gap-1" aria-label="Sections">
