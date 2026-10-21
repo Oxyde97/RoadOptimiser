@@ -1,0 +1,28 @@
+{
+  "name": "RoadOptimizur — Planification & tournées",
+  "short_name": "RoadOptimizur",
+  "description": "Planificateur de tournées multi-conducteurs, preuve de livraison et suivi client. 100 % local.",
+  "lang": "fr",
+  "dir": "ltr",
+  "id": "/roadoptimizur/",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f1f5f9",
+  "theme_color": "#0f172a",
+  "categories": ["business", "productivity", "navigation"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Vue livreur",
+      "short_name": "Livreur",
+      "url": "./?mode=conducteur",
+      "description": "Tournée du jour et preuve de livraison"
+    }
+  ]
+}

@@ -4,6 +4,7 @@
   "description": "Planificateur de tournées multi-conducteurs, preuve de livraison et suivi client. 100 % local.",
   "lang": "fr",
   "dir": "ltr",
+  "id": "/roadoptimizur/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -12,18 +13,9 @@
   "theme_color": "#0f172a",
   "categories": ["business", "productivity", "navigation"],
   "icons": [
-    {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='42' fill='%230f172a'/%3E%3Cpath d='M42 120h66l18-30h24v42H42z' fill='%230ea5e9'/%3E%3Ccircle cx='66' cy='138' r='15' fill='%23fff'/%3E%3Ccircle cx='132' cy='138' r='15' fill='%23fff'/%3E%3C/svg%3E",
-      "sizes": "192x192",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%230f172a'/%3E%3Cpath d='M112 320h176l48-80h64v112H112z' fill='%230ea5e9'/%3E%3Ccircle cx='176' cy='368' r='40' fill='%23fff'/%3E%3Ccircle cx='352' cy='368' r='40' fill='%23fff'/%3E%3C/svg%3E",
-      "sizes": "512x512",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
     {
