@@ -39,6 +39,7 @@ let routeLayer = null;
 let mapToken = 0;
 const routeCache = new Map();
 let driverViewController = null;
+let depotViewPending = false;
 let installPrompt = null;
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -177,6 +178,9 @@ function updateMap() {
     map.fitBounds(window.L.latLngBounds(pts).pad(0.15), { maxZoom: 14, animate: false });
   }
   drawRoutes();
+  if (depotViewPending && map && depot && depot.lat && depot.lng) {
+    try { map.setView([depot.lat, depot.lng], Math.max(map.getZoom(), 12)); depotViewPending = false; } catch { depotViewPending = false; }
+  }
 }
 
 async function drawRoutes() {
@@ -1455,7 +1459,7 @@ function openDepotModal() {
   const d = state.settings.depot;
   openModal(`
     ${modalHeader('Dépôt de départ', 'Point de départ et de retour des tournées')}
-    <form data-depot-form class="p-4 space-y-3">
+    <form data-depot-form data-orig-address="${escapeHtml(d.address || '')}" data-orig-lat="${d.lat || 0}" data-orig-lng="${d.lng || 0}" class="p-4 space-y-3">
       <div><label class="block text-xs font-semibold text-slate-600 mb-1">Nom</label>
         <input name="name" value="${escapeHtml(d.name)}" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base"></div>
       <div><label class="block text-xs font-semibold text-slate-600 mb-1">Adresse</label>
@@ -1478,9 +1482,14 @@ async function submitDepotForm(form) {
   let lat = Number(fd.get('lat')) || 0;
   let lng = Number(fd.get('lng')) || 0;
   const address = String(fd.get('address') || '').trim();
-  if ((!lat || !lng) && address) {
+  const oLat = Number(form.dataset.origLat) || 0;
+  const oLng = Number(form.dataset.origLng) || 0;
+  const coordsChanged = lat !== oLat || lng !== oLng;
+  const addressChanged = address !== (form.dataset.origAddress || '');
+  if (address && (addressChanged || !coordsChanged) && (!lat || !lng || (addressChanged && !coordsChanged))) {
     const geo = await geocode(address);
     if (geo) { lat = geo.lat; lng = geo.lng; }
+    else toast('Géocodage impossible — anciennes coordonnées conservées. Réessaie via la loupe.', 'warn', 6000);
   }
   state.settings.depot = { name: String(fd.get('name') || 'Dépôt').trim(), address, lat, lng };
   save();
@@ -1488,6 +1497,12 @@ async function submitDepotForm(form) {
   routeCache.clear();
   renderPanel();
   updateMap();
+  // Recadrer la carte sur le nouveau point de dépôt (immédiat si carte prête, sinon au prochain updateMap)
+  depotViewPending = Boolean(lat && lng);
+  if (map && lat && lng && window.L) {
+    try { map.invalidateSize(); } catch {}
+    try { map.setView([lat, lng], Math.max(map.getZoom(), 12)); depotViewPending = false; } catch {}
+  }
   toast('Dépôt mis à jour.', 'success');
 }
 
