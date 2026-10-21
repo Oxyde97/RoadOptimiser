@@ -64,6 +64,16 @@ La matrice de distances utilise OSRM/Valhalla quand disponible, sinon haversine 
 
 Signature tactile (canvas haute densité), photos caméra/galerie compressées (max 6), formulaire configurable (check / texte / nombre / photo / signature), notes, horodatage et GPS. Scan via `html5-qrcode` si chargé, sinon `BarcodeDetector`, sinon saisie manuelle ; comparaison aux codes attendus (`expectedCodes` / `barcodes`). Feuille POD imprimable avec signature.
 
+## Scan d'étiquettes colis → création de commande
+
+Bouton **Scanner** (vue Commandes) ou icône code-barres dans le formulaire d'adresse :
+1. Lecture du Code 128 (Chronopost, Colissimo, Mondial Relay…) — caméra si HTTPS, sinon saisie manuelle.
+2. `parseParcelBarcode()` extrait le **code postal encodé dans le n° de suivi** (`0064 260X…` → 64260, `FR-64260` → 64260) et le normalise.
+3. Géocodage Nominatim du CP → ville pré-remplie + GPS.
+4. La commande s'ouvre pré-remplie : nom `Colis XXXX`, notes `N° de suivi`, et le(s) code(s) stocké(s) dans `barcodes` — vérifiés automatiquement lors du scan POD à la livraison.
+
+Plusieurs colis peuvent être scannés sur la même commande (bouton scanner du formulaire).
+
 ## Hors-ligne & PWA
 
 `sw.js` précache la coquille et les modules, sert la navigation en réseau-d’abord avec repli cache, et met en cache les CDN. Les données restent dans `localStorage`, donc disponibles hors-ligne. Les tuiles Leaflet et les appels de routage nécessitent le réseau.

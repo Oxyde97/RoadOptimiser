@@ -129,6 +129,27 @@ export function newDriver(partial = {}) {
   };
 }
 
+export function isValidFrenchCP(cp) {
+  return /^(0[1-9]|[1-8]\d|9[0-5])\d{3}$/.test(String(cp)) || /^97[1-6]\d{2}$/.test(String(cp));
+}
+
+/** Parse un code-barres de colis (Code 128 type Chronopost/Colissimo/Mondial Relay).
+ *  Ces étiquettes n'embarquent pas l'adresse, mais le numéro de suivi code souvent
+ *  le code postal de destination (ex. « 0064 260X… » → 64260, « FR-64260 » → 64260). */
+export function parseParcelBarcode(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const compact = text.replace(/[\s.\-\/]+/g, '').toUpperCase();
+  const cands = [];
+  const fr = compact.match(/FR(\d{5})/);
+  if (fr) cands.push(fr[1]);
+  const chronopost = compact.match(/^00(\d{5})/);
+  if (chronopost) cands.push(chronopost[1]);
+  for (const m of compact.matchAll(/(\d{5})/g)) cands.push(m[1]);
+  const cp = cands.find(isValidFrenchCP) || null;
+  return { tracking: compact, cp, raw: text };
+}
+
 export function newStop(partial = {}) {
   const date = partial.date || todayISO();
   return {

@@ -15,6 +15,7 @@ import {
   exportJSON, importJSONFile, parseCSV, csvRowToStop, stopsToCSV, download, csvStopsFilename,
   todayISO, addDaysISO, mondayISO, formatDateFR, formatDateTimeFR, ensureDate,
   getDriver, getStop, getDriverRoute, uid, minutesFromHHMM, isoAt,
+  parseParcelBarcode,
 } from './storage.js';
 import { geocode, route as routeRoad, matrix as routeMatrix, navigationLinks, estimateTour } from './routing.js';
 import { optimize, reoptimize, applyManualOrder, recomputeEtas, computeLoads } from './optimize.js';
@@ -273,9 +274,14 @@ function renderStops() {
           <h1 class="text-lg font-extrabold text-slate-900 leading-tight">Commandes</h1>
           <p class="text-xs text-slate-500">${formatDateFR(date)} · ${stops.length} arrêt(s)</p>
         </div>
-        <button type="button" data-action="add-stop" class="min-h-[44px] px-3 bg-brand-600 active:bg-brand-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm">
-          <i class="fa-solid fa-plus"></i> Ajouter
-        </button>
+        <div class="flex items-center gap-2">
+          <button type="button" data-action="scan-stop" class="min-h-[44px] px-3 bg-white border-2 border-brand-500 text-brand-700 active:bg-brand-50 rounded-xl text-xs font-bold flex items-center gap-1.5" title="Scanner une étiquette colis (Chronopost, Colissimo…)">
+            <i class="fa-solid fa-barcode"></i> Scanner
+          </button>
+          <button type="button" data-action="add-stop" class="min-h-[44px] px-3 bg-brand-600 active:bg-brand-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm">
+            <i class="fa-solid fa-plus"></i> Ajouter
+          </button>
+        </div>
       </div>
 
       <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm flex items-center justify-between gap-3">
@@ -410,9 +416,36 @@ function renderStopsList() {
 /* Formulaire arrêt                                                    */
 /* ------------------------------------------------------------------ */
 
-function openStopModal(stop = null, presetDate = null) {
+/** Scan d'étiquette colis → commande pré-remplie (CP extrait + géocodé, n° de suivi conservé). */
+async function handleParcelScan(value) {
+  const info = parseParcelBarcode(value);
+  if (!info) { toast('Code illisible.', 'error'); return; }
+  const preset = {
+    name: `Colis ${info.tracking.slice(-8)}`,
+    notes: `N° de suivi : ${info.raw}`,
+    barcodes: [...new Set([info.tracking, info.raw])],
+  };
+  if (info.cp) {
+    toast(`Code postal détecté : ${info.cp} — géocodage…`, 'info');
+    try {
+      const geo = await geocode(info.cp);
+      if (geo) {
+        preset.address = `${info.cp} ${String(geo.display || '').split(',')[0]}`;
+        preset.geo = { lat: geo.lat, lng: geo.lng, display: geo.display };
+      } else {
+        preset.address = info.cp;
+      }
+    } catch { preset.address = info.cp; }
+  } else {
+    toast('Aucun code postal reconnu dans ce numéro — complétez l’adresse.', 'warn', 5000);
+  }
+  openStopModal(null, null, preset);
+}
+
+function openStopModal(stop = null, presetDate = null, preset = null) {
   const isEdit = Boolean(stop);
   const s = stop || newStop({ date: presetDate || currentDate(), serviceMin: state.settings.hours.serviceDefaultMin });
+  if (preset) Object.assign(s, preset);
   const date = s.date || currentDate();
   const pairedOptions = state.stops
     .filter((x) => x.id !== s.id && x.date === date)
@@ -431,9 +464,12 @@ function openStopModal(stop = null, presetDate = null) {
           <label class="block text-xs font-semibold text-slate-600 mb-1">Adresse *</label>
           <div class="flex gap-1">
             <input name="address" data-address required value="${escapeHtml(s.address)}" class="flex-1 min-w-0 px-3 py-2.5 border border-slate-300 rounded-lg text-base" placeholder="12 rue de la Paix, Paris">
+            <button type="button" data-action="scan-into-stop" class="px-3 min-h-[44px] bg-brand-50 border border-brand-200 rounded-lg text-brand-600" title="Scanner une étiquette colis"><i class="fa-solid fa-barcode"></i></button>
             <button type="button" data-action="geocode-stop" class="px-3 min-h-[44px] bg-slate-100 border border-slate-300 rounded-lg text-slate-600" title="Géocoder"><i class="fa-solid fa-magnifying-glass-location"></i></button>
           </div>
           <p class="text-[10px] text-slate-400 mt-1" data-geo-label>${s.geo?.lat ? `GPS ${s.geo.lat.toFixed(5)}, ${s.geo.lng.toFixed(5)}` : 'Adresse non géocodée'}</p>
+          ${(s.barcodes && s.barcodes.length) ? `<p class="text-[10px] font-mono text-brand-700 bg-brand-50 border border-brand-100 rounded px-2 py-1 mt-1 break-all"><i class="fa-solid fa-barcode mr-1"></i>${escapeHtml(String(s.barcodes[0]))}</p>` : ''}
+          <input type="hidden" name="barcodes" value="${escapeHtml((s.barcodes || []).join('|'))}">
           <input type="hidden" name="lat" value="${s.geo?.lat || 0}">
           <input type="hidden" name="lng" value="${s.geo?.lng || 0}">
         </div>
@@ -527,6 +563,7 @@ async function submitStopForm(form) {
     skillsRequired: String(fd.get('skillsRequired') || '').split(',').map((x) => x.trim()).filter(Boolean),
     teamGroup: String(fd.get('teamGroup') || '').trim() || null,
     pairedWith: fd.get('pairedWith') || null,
+    barcodes: String(fd.get('barcodes') || '').split('|').filter(Boolean),
     geo: { lat, lng, display: address },
   };
   if (!data.name || !data.address) { toast('Nom et adresse sont obligatoires.', 'error'); return; }
@@ -1521,6 +1558,41 @@ async function handlePanelClick(ev) {
 
   switch (action) {
     case 'add-stop': openStopModal(); break;
+    case 'scan-stop':
+      openScanner({ expectedCodes: [], barcodes: [] }, { onScan: (v) => { handleParcelScan(v); } });
+      break;
+    case 'scan-into-stop': {
+      const form = btn.closest('form');
+      if (!form) break;
+      openScanner({ expectedCodes: [], barcodes: [] }, { onScan: (v) => {
+        const info = parseParcelBarcode(v);
+        if (!info) { toast('Code illisible.', 'error'); return; }
+        const nameI = form.querySelector('[name=name]');
+        const addrI = form.querySelector('[data-address]');
+        const latI = form.querySelector('[name=lat]');
+        const lngI = form.querySelector('[name=lng]');
+        const noteI = form.querySelector('[name=notes]');
+        const hid = form.querySelector('[name=barcodes]');
+        if (nameI && !nameI.value.trim()) nameI.value = `Colis ${info.tracking.slice(-8)}`;
+        if (addrI && info.cp && !addrI.value.trim()) addrI.value = info.cp;
+        if (noteI && !String(noteI.value).includes('N° de suivi')) noteI.value = (noteI.value ? noteI.value + '\n' : '') + `N° de suivi : ${info.raw}`;
+        if (hid) {
+          const cur = String(hid.value || '').split('|').filter(Boolean);
+          hid.value = [...new Set([...cur, info.tracking, info.raw])].join('|');
+        }
+        if (info.cp && latI && !Number(latI.value)) {
+          geocode(info.cp).then((geo) => {
+            if (!geo) return;
+            latI.value = geo.lat; lngI.value = geo.lng;
+            if (addrI && !addrI.value.trim()) addrI.value = `${info.cp} ${String(geo.display || '').split(',')[0]}`;
+            const lab = form.querySelector('[data-geo-label]');
+            if (lab) lab.textContent = `GPS ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)} — ${String(geo.display).slice(0, 70)}`;
+          }).catch(() => {});
+        }
+        toast('Code-barres ajouté à la commande.', 'success');
+      } });
+      break;
+    }
     case 'edit-stop': if (stop) openStopModal(stop); break;
     case 'delete-stop':
       if (stop && confirm(`Supprimer « ${stop.name} » ?`)) {
