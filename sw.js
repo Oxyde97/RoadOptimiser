@@ -1,0 +1,96 @@
+/**
+ * RoadOptimizur v3 — Service Worker
+ * Cache de la coquille applicative + CDN pour un usage hors-ligne.
+ */
+
+const VERSION = 'roadoptimizur-v3-1';
+const CORE = [
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  './app.js',
+  './storage.js',
+  './routing.js',
+  './optimize.js',
+  './driver.js',
+  './pod.js',
+  './analytics.js',
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(VERSION).then(async (cache) => {
+      await Promise.all(CORE.map((url) => cache.add(url).catch(() => null)));
+      await self.skipWaiting();
+    })
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then(async (keys) => {
+      await Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)));
+      await self.clients.claim();
+    })
+  );
+});
+
+const isCdn = (url) => /cdn\.tailwindcss\.com|cdnjs\.cloudflare\.com|unpkg\.com|cdn\.jsdelivr\.net|tile\.openstreetmap\.org/.test(url.hostname);
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  const url = new URL(req.url);
+  if (!/^https?:$/.test(url.protocol)) return;
+  // Ne jamais mettre en cache les géocodages / itinéraires dynamiques.
+  if (/nominatim|project-osrm|valhalla|openstreetmap\.org\/search|openstreetmap\.org\/reverse/.test(url.href)) return;
+
+  // Navigation : réseau d'abord, coquille en secours hors-ligne.
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(VERSION).then((cache) => cache.put('./index.html', copy)).catch(() => {});
+          return res;
+        })
+        .catch(async () => (await caches.match('./index.html')) || (await caches.match('./')) || Response.error())
+    );
+    return;
+  }
+
+  if (isCdn(url)) {
+    event.respondWith(
+      caches.match(req).then((cached) => {
+        const network = fetch(req)
+          .then((res) => {
+            if (res && (res.ok || res.type === 'opaque')) {
+              const copy = res.clone();
+              caches.open(VERSION).then((cache) => cache.put(req, copy)).catch(() => {});
+            }
+            return res;
+          })
+          .catch(() => cached);
+        return cached || network;
+      })
+    );
+    return;
+  }
+
+  // Ressources locales : cache d'abord, mise à jour en arrière-plan.
+  event.respondWith(
+    caches.match(req).then((cached) => {
+      const network = fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(VERSION).then((cache) => cache.put(req, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => cached);
+      return cached || network;
+    })
+  );
+});
