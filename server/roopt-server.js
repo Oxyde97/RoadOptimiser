@@ -233,12 +233,15 @@ async function handleApi(req, res, url, user, ip) {
 const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.map': 'application/json' };
 function serveStatic(req, res, url, corsOrigin) {
   let file = decodeURIComponent(url.pathname);
-  if (file === '/') file = '/index.html';
+  if (file === '/' || file.endsWith('/')) file += 'index.html';
   const full = path.normalize(path.join(STATIC, file));
   if (!full.startsWith(STATIC)) { res.writeHead(403); return res.end('403'); }
-  fs.readFile(full, (err, buf) => {
+  try { if (fs.statSync(full, { throwIfNoEntry: false })?.isDirectory()) file += '/index.html'; } catch {}
+  const target = path.normalize(path.join(STATIC, file));
+  if (!target.startsWith(STATIC)) { res.writeHead(403); return res.end('403'); }
+  fs.readFile(target, (err, buf) => {
     if (err) { res.writeHead(404, { 'content-type': 'text/plain' }); return res.end('404 — introuvable'); }
-    res.writeHead(200, { 'content-type': MIME[path.extname(full)] || 'application/octet-stream', 'cache-control': 'no-cache', ...(corsOrigin ? { 'access-control-allow-origin': corsOrigin } : {}) });
+    res.writeHead(200, { 'content-type': MIME[path.extname(target)] || 'application/octet-stream', 'cache-control': 'no-cache', ...(corsOrigin ? { 'access-control-allow-origin': corsOrigin } : {}) });
     res.end(buf);
   });
 }
