@@ -3,7 +3,7 @@
  * Cache de la coquille applicative + CDN pour un usage hors-ligne.
  */
 
-const VERSION = 'roadoptimizur-v3-6';
+const VERSION = 'roadoptimizur-v4-0';
 const CORE = [
   './',
   './index.html',
@@ -14,6 +14,8 @@ const CORE = [
   './icons/maskable-512.png',
   './icons/apple-touch-icon.png',
   './app.js',
+  './auth.js',
+  './driver-server.js',
   './storage.js',
   './routing.js',
   './optimize.js',

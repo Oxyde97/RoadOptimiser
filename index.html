@@ -160,6 +160,7 @@
           <button id="btn-print" type="button" class="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 active:bg-slate-700 flex items-center justify-center" title="Imprimer">
             <i class="fa-solid fa-print"></i>
           </button>
+          <span id="user-chip" class="hidden md:flex items-center gap-1.5 h-10 px-3 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold" hidden></span>
           <button id="btn-install" type="button" class="hidden sm:flex w-10 h-10 rounded-lg bg-brand-600 text-white active:bg-brand-700 items-center justify-center" title="Installer l’application">
             <i class="fa-solid fa-mobile-screen-button"></i>
           </button>
@@ -194,6 +195,9 @@
         </button>
         <button type="button" data-tab="settings" class="flex-shrink-0 min-h-[36px] px-3 rounded-lg text-[11px] font-bold text-slate-500 bg-slate-800/60 border border-slate-700 flex items-center gap-1.5">
           <i class="fa-solid fa-sliders"></i> Réglages
+        </button>
+        <button type="button" data-tab="accounts" class="flex-shrink-0 min-h-[36px] px-3 rounded-lg text-[11px] font-bold text-slate-500 bg-slate-800/60 border border-slate-700 flex items-center gap-1.5">
+          <i class="fa-solid fa-user-shield"></i> Comptes
         </button>
       </nav>
     </header>

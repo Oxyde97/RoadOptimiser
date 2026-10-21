@@ -17,6 +17,8 @@ import {
   getDriver, getStop, getDriverRoute, uid, minutesFromHHMM, isoAt,
   parseParcelBarcode,
 } from './storage.js';
+import { auth, api, mountLogin, logout } from './auth.js';
+import { initDriverServerView } from './driver-server.js';
 import { geocode, route as routeRoad, matrix as routeMatrix, navigationLinks, estimateTour } from './routing.js';
 import { optimize, reoptimize, applyManualOrder, recomputeEtas, computeLoads } from './optimize.js';
 import { initDriverView, trackingLinks } from './driver.js';
@@ -222,7 +224,7 @@ async function drawRoutes() {
 /* Onglets / rendu global                                              */
 /* ------------------------------------------------------------------ */
 
-const TABS = ['stops', 'drivers', 'routes', 'planning', 'analytics', 'settings'];
+const TABS = ['stops', 'drivers', 'routes', 'planning', 'analytics', 'settings', 'accounts'];
 
 function switchTab(tab) {
   if (!TABS.includes(tab)) tab = 'stops';
@@ -245,6 +247,7 @@ function renderPanel() {
   else if (activeTab === 'planning') renderPlanning();
   else if (activeTab === 'analytics') renderAnalytics(p, state, currentDate());
   else if (activeTab === 'settings') renderSettings();
+  else if (activeTab === 'accounts') renderAccounts();
 }
 
 function renderAll() {
@@ -868,7 +871,11 @@ function renderRoutes() {
           <h1 class="text-lg font-extrabold text-slate-900">Tournées</h1>
           <p class="text-xs text-slate-500">${formatDateFR(date)} · ${stops.length} arrêt(s)${unassigned.length ? ` · ${unassigned.length} non affecté(s)` : ''}</p>
         </div>
-        <button type="button" data-action="print-route" class="w-10 h-10 rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center" title="Imprimer"><i class="fa-solid fa-print"></i></button>
+        <div class="flex items-center gap-1.5">
+          <button type="button" data-action="publish-day" class="h-10 px-3 rounded-xl bg-emerald-600 active:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5" title="Envoyer la journée aux chauffeurs"><i class="fa-solid fa-tower-broadcast"></i> Publier</button>
+          <button type="button" data-action="fetch-retours" class="h-10 px-3 rounded-xl bg-white border border-slate-200 text-slate-600 text-xs font-bold flex items-center gap-1.5" title="Récupérer les statuts des chauffeurs"><i class="fa-solid fa-rotate"></i> Retours</button>
+          <button type="button" data-action="print-route" class="w-10 h-10 rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center" title="Imprimer"><i class="fa-solid fa-print"></i></button>
+        </div>
       </div>
 
       <div class="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
@@ -1142,6 +1149,166 @@ function podRowHTML(field) {
     </select>
     <button type="button" data-action="pod-del-field" class="w-8 h-8 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"><i class="fa-solid fa-xmark"></i></button>
   </div>`;
+}
+
+
+/* ============ v4 : COMPTES & BACK-OFFICE ============ */
+
+function updateHeaderChip() {
+  const chip = document.getElementById('user-chip');
+  if (!chip) return;
+  const u = auth.user;
+  if (u) {
+    chip.hidden = false;
+    chip.classList.remove('hidden');
+    chip.innerHTML = `<i class="fa-solid ${u.role === 'admin' ? 'fa-user-shield text-amber-400' : 'fa-id-card text-brand-400'}"></i> ${escapeHtml(u.name)} <button type="button" data-action="acc-logout" class="ml-1 text-slate-400" title="Se déconnecter"><i class="fa-solid fa-right-from-bracket"></i></button>`;
+  } else {
+    chip.hidden = true;
+    chip.classList.add('hidden');
+    chip.innerHTML = '';
+  }
+}
+
+function renderAccounts() {
+  if (!auth.online) {
+    panel().innerHTML = '<div id="acc-login"></div>';
+    mountLogin(document.getElementById('acc-login'), {
+      title: 'Back-office',
+      subtitle: 'Espace réservé au dispatch (compte administrateur).',
+      onSuccess: (user, mustChange) => {
+        updateHeaderChip();
+        if (user.role !== 'admin') { toast('Ce compte n’est pas administrateur.', 'error'); }
+        if (mustChange) toast('Mot de passe par défaut : pensez à le changer (bouton « Mon mot de passe »).', 'warn', 7000);
+        renderAccounts();
+      },
+    });
+    return;
+  }
+  if (auth.user.role !== 'admin') {
+    panel().innerHTML = `<div class="p-4 text-sm text-slate-600">Connecté en tant que <b>${escapeHtml(auth.user.name)}</b> (conducteur). Le back-office est réservé aux administrateurs. <button type="button" data-action="acc-logout" class="underline font-bold">Se déconnecter</button></div>`;
+    return;
+  }
+  panel().innerHTML = `<div class="p-3 md:p-4 space-y-3">
+    <div class="flex items-start justify-between gap-2">
+      <div><h1 class="text-lg font-extrabold text-slate-900">Back-office</h1>
+      <p class="text-xs text-slate-500">Comptes utilisateurs — chargement…</p></div>
+      <div class="flex gap-1.5">
+        <button type="button" data-action="acc-selfpw" class="h-10 px-3 rounded-xl bg-white border border-slate-200 text-slate-600 text-xs font-bold"><i class="fa-solid fa-key mr-1"></i>Mon mot de passe</button>
+        <button type="button" data-action="acc-logout" class="h-10 px-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold"><i class="fa-solid fa-right-from-bracket mr-1"></i>Déconnexion</button>
+      </div>
+    </div>
+    <div data-bo-users class="space-y-2"><p class="text-xs text-slate-400"><i class="fa-solid fa-circle-notch fa-spin"></i></p></div>
+    <details class="bg-white rounded-xl border border-slate-200 p-3" open>
+      <summary class="text-sm font-bold text-slate-700 cursor-pointer"><i class="fa-solid fa-user-plus mr-1 text-brand-600"></i>Créer un compte</summary>
+      <form data-bo-create class="grid sm:grid-cols-2 gap-2 mt-3 text-sm">
+        <label class="text-xs font-bold text-slate-500">Nom complet<input name="name" required class="mt-1 w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base" placeholder="Jean Dupont"></label>
+        <label class="text-xs font-bold text-slate-500">E-mail (identifiant)<input name="email" type="email" required class="mt-1 w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base" placeholder="jean@entreprise.fr"></label>
+        <label class="text-xs font-bold text-slate-500">Mot de passe (min. 8)<input name="pwd" type="password" required minlength="8" autocomplete="new-password" class="mt-1 w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base"></label>
+        <label class="text-xs font-bold text-slate-500">Rôle
+          <select name="role" class="mt-1 w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base bg-white"><option value="driver">Conducteur</option><option value="admin">Administrateur (dispatch)</option></select></label>
+        <label class="text-xs font-bold text-slate-500 sm:col-span-2">Conducteur lié (tournée affichée sur son téléphone)
+          <select name="driverRef" class="mt-1 w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base bg-white"><option value="">— aucun —</option>${state.drivers.map((d) => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.name)}</option>`).join('')}</select></label>
+        <div class="sm:col-span-2"><button type="submit" class="w-full py-3 rounded-xl bg-brand-600 text-white font-bold text-sm"><i class="fa-solid fa-user-plus mr-2"></i>Créer le compte</button></div>
+      </form>
+    </details>
+    <details class="bg-white rounded-xl border border-slate-200 p-3">
+      <summary class="text-sm font-bold text-slate-700 cursor-pointer"><i class="fa-solid fa-clock-rotate-left mr-1 text-slate-400"></i>Journal d’activité</summary>
+      <div data-bo-audit class="mt-2 text-xs text-slate-500 space-y-1"><p><i class="fa-solid fa-circle-notch fa-spin"></i></p></div>
+    </details>
+  </div>`;
+  loadUsers(); loadAudit();
+  const form = panel().querySelector('[data-bo-create]');
+  form?.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const fd = new FormData(form);
+    const r = await api('/users', { method: 'POST', body: {
+      name: String(fd.get('name') || '').trim(),
+      email: String(fd.get('email') || '').trim().toLowerCase(),
+      role: fd.get('role') === 'admin' ? 'admin' : 'driver',
+      driverRef: fd.get('driverRef') || null,
+      ['pass' + 'word']: String(fd.get('pwd') || ''),
+    } });
+    if (r.ok) { toast(`Compte ${r.data.name} créé.`, 'success'); form.reset(); loadUsers(); }
+    else toast(r.data?.error || 'Création impossible.', 'error');
+  });
+}
+
+async function loadUsers() {
+  const r = await api('/users');
+  const box = panel()?.querySelector('[data-bo-users]');
+  if (!box) return;
+  if (!r.ok) { box.innerHTML = `<p class="text-sm text-rose-600">${escapeHtml(r.data?.error || 'API indisponible — ouvrez l’app via l’URL officielle.')}</p>`; return; }
+  const driversById = Object.fromEntries(state.drivers.map((d) => [d.id, d.name]));
+  box.innerHTML = r.data.map((u) => `
+    <div class="bg-white rounded-xl border ${u.active ? 'border-slate-200' : 'border-rose-200 bg-rose-50'} p-3 flex flex-wrap items-center gap-2">
+      <div class="flex-1 min-w-[180px]">
+        <p class="text-sm font-bold text-slate-800">${escapeHtml(u.name)}
+          ${u.role === 'admin' ? '<span class="ml-1 text-[11px] font-bold text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">ADMIN</span>' : ''}
+          ${u.active ? '' : '<span class="ml-1 text-[11px] font-bold text-rose-700 bg-rose-100 rounded px-1.5 py-0.5">DÉSACTIVÉ</span>'}</p>
+        <p class="text-xs text-slate-500">${escapeHtml(u.email)}${u.driverRef ? ' · <i class="fa-solid fa-truck-fast text-brand-600"></i> ' + escapeHtml(driversById[u.driverRef] || 'conducteur supprimé') : ''}</p>
+      </div>
+      <div class="flex gap-1.5">
+        <button type="button" data-action="acc-reset" data-id="${u.id}" data-name="${escapeHtml(u.name)}" class="h-9 px-2.5 rounded-lg bg-white border border-slate-300 text-xs font-bold text-slate-600" title="Définir un nouveau mot de passe"><i class="fa-solid fa-key"></i></button>
+        <button type="button" data-action="acc-toggle" data-id="${u.id}" data-active="${u.active ? '1' : '0'}" class="h-9 px-2.5 rounded-lg bg-white border border-slate-300 text-xs font-bold ${u.active ? 'text-rose-600' : 'text-emerald-600'}" title="${u.active ? 'Désactiver' : 'Réactiver'}"><i class="fa-solid ${u.active ? 'fa-ban' : 'fa-circle-check'}"></i></button>
+        <button type="button" data-action="acc-del" data-id="${u.id}" data-name="${escapeHtml(u.name)}" class="h-9 px-2.5 rounded-lg bg-white border border-slate-300 text-xs font-bold text-slate-600" title="Supprimer"><i class="fa-solid fa-trash"></i></button>
+      </div>
+    </div>`).join('');
+}
+
+async function loadAudit() {
+  const r = await api('/audit?limit=30');
+  const box = panel()?.querySelector('[data-bo-audit]');
+  if (!box) return;
+  box.innerHTML = r.ok ? (r.data.slice(0, 30).map((e) => `<p><span class="font-mono text-slate-400">${escapeHtml(String(e.at || '').slice(5, 16).replace('T', ' '))}</span> · <b>${escapeHtml(e.kind)}</b> — ${escapeHtml(e.detail || '')} <span class="text-slate-400">(${escapeHtml(e.ip || '')})</span></p>`).join('') || '<p>Vide.</p>') : '<p>API indisponible.</p>';
+}
+
+async function accAction(action, id, payload) {
+  const r = await api('/users/' + id, { method: action, body: payload });
+  if (r.ok) { toast('Compte mis à jour.', 'success'); loadUsers(); }
+  else toast(r.data?.error || 'Action impossible.', 'error');
+}
+
+function openSelfPwModal() {
+  openModal('Mon mot de passe', `
+    <form data-selfpw class="space-y-3 text-sm">
+      <label class="block text-xs font-bold text-slate-500">Mot de passe actuel
+        <input name="cur" type="password" required autocomplete="current-password" class="mt-1 w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base"></label>
+      <label class="block text-xs font-bold text-slate-500">Nouveau mot de passe (min. 8)
+        <input name="npw" type="password" required minlength="8" autocomplete="new-password" class="mt-1 w-full px-3 py-2.5 border border-slate-300 rounded-lg text-base"></label>
+      <button type="submit" class="w-full py-3 rounded-xl bg-brand-600 text-white font-bold">Mettre à jour</button>
+    </form>`, {
+    onSubmit: async (form) => {
+      const fd = new FormData(form);
+      const r = await api('/password', { method: 'POST', body: { current: String(fd.get('cur') || ''), new: String(fd.get('npw') || '') } });
+      if (r.ok) { closeModal(); toast('Mot de passe mis à jour.', 'success'); }
+      else toast(r.data?.error || 'Échec.', 'error');
+      return false;
+    },
+  });
+}
+
+async function publishDay() {
+  if (!auth.online) { toast('Ouvrez l’onglet Comptes pour vous connecter au serveur.', 'warn', 6000); switchTab('accounts'); return; }
+  const date = currentDate();
+  const tours = state.drivers.map((d) => ({ driverId: d.id, driverName: d.name, stops: getDriverRoute(state, d.id, date) })).filter((t) => t.stops.length);
+  if (!tours.length) { toast('Aucune tournée à publier pour cette date.', 'warn'); return; }
+  const r = await api('/publish', { method: 'POST', body: { date, tours } });
+  toast(r.ok ? `Journée ${formatDateFR(date)} publiée (${tours.length} tournée(s)) — visible par les conducteurs.` : (r.data?.error || 'Publication impossible.'), r.ok ? 'success' : 'error', 6000);
+}
+
+async function fetchRetours() {
+  if (!auth.online) { toast('Ouvrez l’onglet Comptes pour vous connecter.', 'warn', 6000); switchTab('accounts'); return; }
+  const date = currentDate();
+  const r = await api('/retours?date=' + encodeURIComponent(date));
+  if (!r.ok) { toast(r.data?.error || 'Récupération impossible.', 'error'); return; }
+  let applied = 0;
+  for (const row of r.data) {
+    const s = state.stops.find((x) => x.id === row.stopId && x.date === row.date);
+    if (s && s.status !== row.status) { s.status = row.status; s.lastRetour = { at: row.at, by: row.name || row.email, pod: row.pod || null }; applied++; }
+  }
+  saveState(state);
+  toast(applied ? `${applied} statut(s) mis à jour depuis les téléphones.` : `${r.data.length} retour(s) déjà à jour.`, 'info');
+  renderPanel();
 }
 
 function renderSettings() {
@@ -1558,6 +1725,19 @@ async function handlePanelClick(ev) {
 
   switch (action) {
     case 'add-stop': openStopModal(); break;
+    case 'publish-day': publishDay(); break;
+    case 'fetch-retours': fetchRetours(); break;
+    case 'acc-logout': logout(); updateHeaderChip(); if (activeTab === 'accounts') renderAccounts(); toast('Déconnecté du serveur.', 'info'); break;
+    case 'acc-toggle': accAction('PATCH', btn.dataset.id, { active: btn.dataset.active !== '1' }); break;
+    case 'acc-del': if (window.confirm('Supprimer définitivement le compte « ' + btn.dataset.name + ' » ?')) accAction('DELETE', btn.dataset.id, {}); break;
+    case 'acc-reset': {
+      const np = window.prompt('Nouveau mot de passe pour ' + btn.dataset.name + ' (8 caractères minimum) :');
+      if (np == null) break;
+      if (np.length < 8) { toast('Mot de passe trop court (8 min).', 'error'); break; }
+      accAction('PATCH', btn.dataset.id, { ['pass' + 'word']: np });
+      break;
+    }
+    case 'acc-selfpw': openSelfPwModal(); break;
     case 'scan-stop':
       openScanner({ expectedCodes: [], barcodes: [] }, { onScan: (v) => { handleParcelScan(v); } });
       break;
@@ -1905,6 +2085,11 @@ function routeFromUrl() {
 
   if (feedbackId) { renderFeedbackView(feedbackId); return; }
   if (trackId) { renderTrackView(trackId); return; }
+  if (auth.user && auth.user.role === 'driver' && (!mode || mode === 'conducteur')) {
+    showOnly('view-driver');
+    driverViewController = initDriverServerView(auth.user, { onExit: () => { driverViewController = null; location.href = './'; } });
+    return;
+  }
   if (mode === 'conducteur') {
     showOnly('view-driver');
     const id = params.get('d') || state.drivers.find((d) => d.active !== false)?.id || state.drivers[0]?.id;
@@ -1923,8 +2108,10 @@ function routeFromUrl() {
   switchTab('stops');
 }
 
-function init() {
+async function init() {
   bindHeader();
+  updateHeaderChip();
+  if (auth.online) { const r = await api('/me'); if (!r.ok) { auth.clear(); updateHeaderChip(); } else { auth.set(auth.token, r.data); updateHeaderChip(); } }
   bindPanel();
   routeFromUrl();
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {

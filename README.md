@@ -66,6 +66,16 @@ La matrice de distances utilise OSRM/Valhalla quand disponible, sinon haversine 
 - Échec réseau/API → repli haversine, tracé en pointillés, aucune erreur bloquante.
 - Géocodage Nominatim limité à 1 requête/seconde, résultats mis en cache localement.
 
+
+## Comptes & back-office (v4)
+
+- **Backend** : `server/roopt-server.js` — Node 24 natif (`node:sqlite`, `node:crypto`), zéro dépendance npm. Déployé en Docker sur le Synology (`roopt-api`, port 8080), exposé en HTTPS via Tailscale.
+- **Chauffeurs** : identification obligatoire (e-mail + mot de passe) → leur vue affiche la **tournée publiée** par le dispatch ; les statuts (livré/absent/échec) remontent au serveur en temps réel.
+- **Back-office** (onglet Comptes, réservé admin) : création/comptes, rôles, liaison compte↔conducteur, désactivation, suppression, reset mot de passe, journal d'audit.
+- **Sécurité** : mots de passe hachés PBKDF2-scrypt sel unique, jetons HMAC signés (30 j), anti-brute force (6 tentatives/min/IP), CORS par liste d'origines, sélecteurs SQL paramétrés.
+- API : `POST /api/login` · `GET /api/me` · `POST /api/password` · `GET|POST /api/users` · `PATCH|DELETE /api/users/:id` · `POST /api/publish` · `GET /api/my-tour` · `POST /api/stop-status` · `GET /api/retours` · `GET /api/audit` · `GET /api/health`.
+- L'URL LAN (Web Station, port 80) reste un miroir **sans compte** (dégradation mode local).
+
 ## POD & scan
 
 Signature tactile (canvas haute densité), photos caméra/galerie compressées (max 6), formulaire configurable (check / texte / nombre / photo / signature), notes, horodatage et GPS. Scan via `html5-qrcode` si chargé, sinon `BarcodeDetector`, sinon saisie manuelle ; comparaison aux codes attendus (`expectedCodes` / `barcodes`). Feuille POD imprimable avec signature.
