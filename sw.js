@@ -3,7 +3,7 @@
  * Cache de la coquille applicative + CDN pour un usage hors-ligne.
  */
 
-const VERSION = 'roadoptimizur-v3-5';
+const VERSION = 'roadoptimizur-v3-6';
 const CORE = [
   './',
   './index.html',
@@ -83,19 +83,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Ressources locales : cache d'abord, mise à jour en arrière-plan.
+  // Ressources locales : réseau d'abord (ne sert jamais un module obsolète ou corrompu),
+  // secours cache uniquement hors-ligne.
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const network = fetch(req)
-        .then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(VERSION).then((cache) => cache.put(req, copy)).catch(() => {});
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || network;
-    })
+    fetch(req)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(VERSION).then((cache) => cache.put(req, copy)).catch(() => {});
+        }
+        return res;
+      })
+      .catch(async () => (await caches.match(req)) || Response.error())
   );
 });
