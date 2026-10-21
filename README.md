@@ -1,5 +1,11 @@
 # RoadOptimizur v3
 
+**URLs :**
+- HTTPS (recommandé — caméra/scan, GPS, PWA installable) : `https://oxyde-syno.tail86cd2f.ts.net/roadoptimizur/`
+- LAN : `http://192.168.1.120/roadoptimizur/` (ou `https://…` avec le certificat auto-signé Synology — avertissement à accepter)
+
+Le HTTPS est fourni par le **Tailscale Funnel** du NAS (certificat Let's Encrypt automatique, valable et renouvelé par Tailscale). Les liens de suivi client partagent automatiquement l'URL d'origine (donc publics via le funnel).
+
 Planificateur de tournées **100 % statique**, mobile-first, sans build step et sans serveur applicatif. Trois espaces dans la même page :
 
 - **Planificateur** (`/`) : commandes, conducteurs/véhicules, optimisation multi-tournées, planning hebdomadaire, analytique, impression, réglages.
