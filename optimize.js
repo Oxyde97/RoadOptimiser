@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v3 — optimize.js
+ * RoadOptimiser v3 — optimize.js
  * Affectation multi-conducteurs + ordonnancement : nearest-neighbor, puis 2-opt.
  * Contraintes : fenêtres horaires, capacité véhicule, compétences, précédence
  * pickup → delivery, teamGroup, équilibrage de charge, départ flexible.

@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v3 — pod.js
+ * RoadOptimiser v3 — pod.js
  * Preuve de livraison : signature canvas, photos caméra, formulaire personnalisé,
  * scan code-barres, géolocalisation, horodatage. Feuille POD imprimable.
  */

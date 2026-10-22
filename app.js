@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v3 — app.js
+ * RoadOptimiser v3 — app.js
  *
  * TODO PHASE 2 (serveur requis) :
  *  - #23 SSO / Active Directory (LDAP)
@@ -1414,7 +1414,7 @@ function renderSettings() {
           <button type="button" data-action="settings-reset" class="min-h-[40px] bg-red-50 border border-red-200 rounded-lg text-[11px] font-bold text-red-600"><i class="fa-solid fa-trash-can mr-1"></i>Réinitialiser</button>
         </div>
         <button type="button" data-action="settings-install" class="w-full min-h-[40px] bg-slate-900 text-white rounded-lg text-[11px] font-bold"><i class="fa-solid fa-download mr-1"></i>Installer l’application (PWA)</button>
-        <p class="text-[10px] text-slate-400">RoadOptimizur v3 · 100% local · SSO/API/SMS temps réel : phase 2 (serveur requis)</p>
+        <p class="text-[10px] text-slate-400">RoadOptimiser v3 · 100% local · SSO/API/SMS temps réel : phase 2 (serveur requis)</p>
       </section>
     </div>`;
 }
@@ -1517,7 +1517,7 @@ function printTour() {
     : state.drivers.filter((d) => state.stops.some((s) => s.driverId === d.id && s.date === date)).map((d) => d.id);
   if (!ids.length) { toast('Aucune tournée à imprimer.', 'warn'); return; }
   const area = document.getElementById('print-area');
-  const company = state.settings.company.name || 'RoadOptimizur';
+  const company = state.settings.company.name || 'RoadOptimiser';
   const depot = state.settings.depot;
 
   area.innerHTML = ids.map((id, idx) => {
@@ -1593,7 +1593,7 @@ function renderTrackView(stopId) {
       <header class="bg-slate-900 text-white px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-4">
         <div class="flex items-center gap-2">
           <span class="w-9 h-9 rounded-xl bg-brand-500 flex items-center justify-center"><i class="fa-solid fa-truck-fast"></i></span>
-          <div><p class="text-[10px] uppercase tracking-widest text-brand-300 font-bold">Suivi de livraison</p><p class="text-sm font-bold">${escapeHtml(state.settings.company.name || 'RoadOptimizur')}</p></div>
+          <div><p class="text-[10px] uppercase tracking-widest text-brand-300 font-bold">Suivi de livraison</p><p class="text-sm font-bold">${escapeHtml(state.settings.company.name || 'RoadOptimiser')}</p></div>
         </div>
         <h1 class="text-xl font-extrabold mt-3">${escapeHtml(stop.name)}</h1>
         <p class="text-xs text-slate-300 mt-0.5">${escapeHtml(stop.address)}</p>
@@ -1626,7 +1626,7 @@ function renderTrackView(stopId) {
           <i class="fa-solid fa-star mr-1"></i> Donner mon avis
         </a>
       </main>
-      <footer class="p-3 text-center text-[10px] text-slate-400 safe-bottom">RoadOptimizur · ${formatDateFR(stop.date)}</footer>
+      <footer class="p-3 text-center text-[10px] text-slate-400 safe-bottom">RoadOptimiser · ${formatDateFR(stop.date)}</footer>
     </div>`;
 
   if (typeof window.L !== 'undefined') {

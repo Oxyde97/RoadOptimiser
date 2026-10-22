@@ -1,9 +1,9 @@
 /**
- * RoadOptimizur v3 — Service Worker
+ * RoadOptimiser v3 — Service Worker
  * Cache de la coquille applicative + CDN pour un usage hors-ligne.
  */
 
-const VERSION = 'roadoptimizur-v4-2';
+const VERSION = 'roadoptimizur-v4-3';
 const CORE = [
   './',
   './index.html',

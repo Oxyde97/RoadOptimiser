@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v3 — analytics.js
+ * RoadOptimiser v3 — analytics.js
  * Analytique par jour/conducteur : km, durée, arrêts, statuts, coût,
  * taux d'utilisation, graphiques Chart.js, export CSV.
  */

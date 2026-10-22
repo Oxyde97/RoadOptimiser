@@ -1,4 +1,4 @@
-# RoadOptimizur v3
+# RoadOptimiser v3
 
 **URLs :**
 - HTTPS (recommandé — caméra/scan, GPS, PWA installable) : `https://oxyde-syno.tail86cd2f.ts.net/roadoptimizur/`
@@ -115,9 +115,4 @@ Feuille de route A4 par conducteur (arrêts, créneaux, téléphone, notes, case
 3. Vérifier `manifest.webmanifest` et `sw.js` en HTTP 200.
 4. Ouvrir sur mobile → « Ajouter à l’écran d’accueil ».
 
-Dépôt cible : `github.com/Oxyde97/RoadOptimizur` (commit/push à effectuer côté poste de travail).
-
-### Gate d'identification obligatoire (v4.1)
-- L'app exige une connexion au démarrage (admin ou chauffeur) — seuls les liens clients (`?track=`, `?feedback=`) restent publics.
-- Admin connecté → redirigé vers l'onglet **Comptes** (back-office). Chauffeur connecté → **vue commandes** (tournée publiée).
-- Déconnexion (puce identité ou bouton du back-office) → retour immédiat à l'écran d'identification.
+Dépôt cible : `github.com/Oxyde97/RoadOptimiser` (commit/push à effectuer côté poste de travail).

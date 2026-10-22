@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v3 — routing.js
+ * RoadOptimiser v3 — routing.js
  * Géocodage Nominatim (cache + limite 1 req/s), itinéraires OSRM / Valhalla,
  * matrices de distances et repli haversine.
  */

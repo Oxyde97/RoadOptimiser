@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v4 — authentification & client API back-office
+ * RoadOptimiser v4 — authentification & client API back-office
  * Détection auto de l'API : même origine (/api) sinon, sur HTTP LAN, port 8080 direct.
  * requireGate() impose l'identification plein écran avant toute utilisation (sauf liens clients).
  */
@@ -89,7 +89,7 @@ function showGate(opts = {}) {
     el.innerHTML = '<div class="h-full overflow-y-auto" style="background:linear-gradient(160deg,#0f172a 0%,#1e293b 60%,#0f172a 100%)"><div id="auth-gate-inner"></div></div>';
     const inner = el.querySelector('#auth-gate-inner');
     mountLogin(inner, {
-      title: 'RoadOptimizur',
+      title: 'RoadOptimiser',
       subtitle: 'Identification requise — conducteurs et dispatch.',
       onSuccess: (user) => {
         el.classList.add('hidden');

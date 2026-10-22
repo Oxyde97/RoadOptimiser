@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v3 — storage.js
+ * RoadOptimiser v3 — storage.js
  * Persistance locale, contrat de données `roadoptimizur.v3`, import/export.
  * Aucune dépendance externe.
  */

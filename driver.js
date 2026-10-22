@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v3 — driver.js
+ * RoadOptimiser v3 — driver.js
  * Vue livreur mobile-first : tournée du jour, statuts, navigation, POD, scan,
  * GPS + fil d'Ariane, mode hors-ligne.
  */
@@ -198,7 +198,7 @@ function renderShell(state, driver, date, stops, online) {
         </div>
 
         <p class="text-[11px] text-slate-400 text-center pt-2">
-          RoadOptimizur v3 · données enregistrées sur cet appareil
+          RoadOptimiser v3 · données enregistrées sur cet appareil
         </p>
       </main>
 

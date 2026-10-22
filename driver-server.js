@@ -1,5 +1,5 @@
 /**
- * RoadOptimizur v4 — vue conducteur connectée au serveur.
+ * RoadOptimiser v4 — vue conducteur connectée au serveur.
  * Affiche la tournée publiée pour le compte (my-tour), remonte les statuts en temps réel.
  */
 import { auth, api, logout } from './auth.js';

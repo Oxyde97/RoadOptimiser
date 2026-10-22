@@ -79,9 +79,11 @@ const attempts = new Map();
 function rateLimited(ip) {
   const now = Date.now();
   const list = (attempts.get(ip) || []).filter((t) => now - t < 60000);
-  if (list.length >= 6) { attempts.set(ip, list); return true; }
-  list.push(now); attempts.set(ip, list); return false;
+  attempts.set(ip, list);
+  return list.length >= 6;
 }
+function noteFail(ip) { const l = attempts.get(ip) || []; l.push(Date.now()); attempts.set(ip, l); }
+function clearFails(ip) { attempts.delete(ip); }
 function currentUser(req) {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
   if (!m) return null;
@@ -120,7 +122,8 @@ async function handleApi(req, res, url, user, ip) {
     if (rateLimited(ip)) { log('login_ratelimit', b.email, null, ip); return { code: 429, obj: { error: 'Trop de tentatives — reessayez dans une minute.' } }; }
     const u = db.prepare('SELECT * FROM users WHERE email = ?').get(String(b.email || '').trim());
     const okUser = u && u.active && checkPass(b.password || '', u.pass);
-    if (!okUser) { log('login_fail', b.email, null, ip); return { code: 401, obj: { error: 'Identifiants incorrects.' } }; }
+    if (!okUser) { noteFail(ip); log('login_fail', b.email, null, ip); return { code: 401, obj: { error: 'Identifiants incorrects.' } }; }
+    clearFails(ip);
     log('login_ok', u.email, u.id, ip);
     return { code: 200, obj: { token: makeToken(u), user: publicUser(u), mustChange: u.email.toLowerCase() === 'admin@roadoptimizur.local' && checkPass('RoadOpt#2026', u.pass) } };
   }
