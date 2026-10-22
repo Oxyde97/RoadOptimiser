@@ -1249,12 +1249,19 @@ function ensureScopeConsistency() {
   if (auth.user && auth.user.role === 'admin' && localStorage.getItem(SCOPE_ACTIVE)) clearDriverScope();
 }
 let wsPushTimer = null; let wsBootDone = false;
+function wsScore(s) {
+  if (!s) return -1;
+  const dates = ((s.planning && s.planning.dates) || []).length;
+  const depotAddr = (s.settings && s.settings.depot && s.settings.depot.address) ? 3 : 0;
+  return (s.stops || []).length + (s.drivers || []).length + depotAddr + Math.max(0, dates - 1);
+}
 function scheduleWsPush() {
   if (!auth.online || !auth.user || auth.user.role !== 'admin' || serverScope) return;
   clearTimeout(wsPushTimer); wsPushTimer = setTimeout(pushWorkspace, 2500);
 }
 async function pushWorkspace() {
   if (!auth.online || !auth.user || auth.user.role !== 'admin' || serverScope) return false;
+  if (wsScore(state) <= 0) return false;
   try { const r = await api('/ws', { method: 'POST', body: state }); return Boolean(r.ok); } catch { return false; }
 }
 async function pullAdminWorkspace() {
@@ -1263,20 +1270,17 @@ async function pullAdminWorkspace() {
     const r = await api('/ws');
     if (!r.ok) throw new Error('http');
     const remote = r.data && r.data.data;
-    if (!remote) {
-      wsBootDone = true;
-      if ((state.stops || []).length || (state.planning && state.planning.dates || []).length > 1) await pushWorkspace();
-      return;
-    }
     const localStamp = localStorage.getItem('roadoptimizur.ws.stamp') || '';
-    const remoteStamp = r.data.updated || '';
-    if (!localStamp || remoteStamp >= localStamp) {
-      Object.assign(state, remote);
-      save(); renderAll();
-      toast('Espace de travail charge depuis le serveur.', 'ok', 2500);
-    } else {
-      await pushWorkspace();
-    }
+    const remoteStamp = r.data && r.data.updated || '';
+    const sLoc = wsScore(state), sRem = wsScore(remote);
+    if (sRem <= 0 && sLoc <= 0) { wsBootDone = true; return; }
+    if (sRem <= 0) { await pushWorkspace(); wsBootDone = true; return; }
+    if (!localStamp) {
+      if (sLoc >= sRem) { await pushWorkspace(); toast('Espace de travail de cet appareil envoye au serveur.', 'ok', 3000); }
+      else { Object.assign(state, remote); save(); renderAll(); toast('Espace de travail charge depuis le serveur.', 'ok', 2500); }
+    } else if (remoteStamp >= localStamp) {
+      if (sLoc > sRem) { await pushWorkspace(); } else { Object.assign(state, remote); save(); renderAll(); }
+    } else { await pushWorkspace(); }
     wsBootDone = true;
   } catch { wsBootDone = true; toast('Serveur injoignable — donnees locales affichees.', 'warn', 5000); }
 }
