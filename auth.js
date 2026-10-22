@@ -119,7 +119,7 @@ export function mountLogin(el, opts = {}) {
     <div class="min-h-[80dvh] flex items-center justify-center p-4">
       <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg border border-slate-200 p-5">
         <div class="text-center mb-4">
-          <div class="w-14 h-14 mx-auto rounded-2xl bg-slate-900 flex items-center justify-center mb-2"><i class="fa-solid fa-campground text-brand-400 text-xl"></i></div>
+          <img src="icons/logo-512.png" class="w-16 h-16 mx-auto mb-2" alt="">
           <h2 class="text-lg font-black text-slate-800">${esc(opts.title || 'Identification')}</h2>
           <p class="text-xs text-slate-500 mt-1">${esc(opts.subtitle || 'Connecte-toi pour accéder à ton compte.')}</p>
         </div>
