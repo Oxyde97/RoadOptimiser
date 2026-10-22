@@ -276,6 +276,15 @@ function renderAll() {
 function renderStops() {
   const date = currentDate();
   const stops = state.stops.filter((s) => s.date === date);
+  if (serverScope && auth.user && auth.user.role === 'driver' && !stops.filter((s) => String(s.driverId) === serverScope.driverId).length) {
+    panel().innerHTML = `<div class="p-4 space-y-3">
+      <div class="rounded-xl bg-amber-50 border border-amber-300 p-4 text-amber-900">
+        <p class="font-extrabold text-sm"><i class="fa-solid fa-circle-info mr-1"></i>Aucune tournée publiée pour ce jour</p>
+        <p class="text-xs mt-1 leading-relaxed">Ton compte affiche ce que le dispatch publie depuis son poste. Rien n'a encore été publié pour cette date.</p>
+        <button type="button" data-action="ws-repull" class="mt-3 h-10 px-4 rounded-xl bg-amber-500 text-white text-xs font-bold"><i class="fa-solid fa-rotate mr-1"></i>Vérifier à nouveau</button>
+      </div></div>`;
+    return;
+  }
   const unassigned = stops.filter((s) => !s.driverId && s.status === 'pending').length;
   const delivered = stops.filter((s) => s.status === 'delivered').length;
   const depot = state.settings.depot;
@@ -1262,7 +1271,11 @@ function scheduleWsPush() {
 async function pushWorkspace() {
   if (!auth.online || !auth.user || auth.user.role !== 'admin' || serverScope) return false;
   if (wsScore(state) <= 0) return false;
-  try { const r = await api('/ws', { method: 'POST', body: state }); return Boolean(r.ok); } catch { return false; }
+  let okPush = false;
+  try { const r = await api('/ws', { method: 'POST', body: state }); okPush = Boolean(r.ok); } catch {}
+  const badge = document.getElementById('save-state');
+  if (badge) { badge.textContent = okPush ? 'Enregistré · serveur ✓' : 'Enregistré · serveur ✨ (hors ligne)'; badge.className = okPush ? 'text-[10px] text-emerald-600' : 'text-[10px] text-amber-600'; }
+  return okPush;
 }
 async function pullAdminWorkspace() {
   if (!auth.online || !auth.user || auth.user.role !== 'admin') { wsBootDone = true; return; }
@@ -1939,6 +1952,7 @@ async function handlePanelClick(ev) {
     case 'add-stop': openStopModal(); break;
     case 'publish-day': publishDay(); break;
     case 'fetch-retours': fetchRetours(); break;
+    case 'ws-repull': driverPullWeek().then(renderAll); break;
     case 'acc-logout': doLogout(); break;
     case 'live-refresh': refreshLiveCards(); break;
     case 'live-locate': {
