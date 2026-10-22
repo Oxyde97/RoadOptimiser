@@ -50,6 +50,7 @@ const modalRoot = () => document.getElementById('modal-root');
 function save() {
   try { localStorage.setItem('roadoptimizur.ws.stamp', new Date().toISOString()); } catch {}
   scheduleWsPush();
+  if (serverScope) scheduleTourPush();
   const ok = saveState(state);
   const badge = document.getElementById('save-state');
   if (badge) {
@@ -280,8 +281,11 @@ function renderStops() {
     panel().innerHTML = `<div class="p-4 space-y-3">
       <div class="rounded-xl bg-amber-50 border border-amber-300 p-4 text-amber-900">
         <p class="font-extrabold text-sm"><i class="fa-solid fa-circle-info mr-1"></i>Aucune tournée publiée pour ce jour</p>
-        <p class="text-xs mt-1 leading-relaxed">Ton compte affiche ce que le dispatch publie depuis son poste. Rien n'a encore été publié pour cette date.</p>
-        <button type="button" data-action="ws-repull" class="mt-3 h-10 px-4 rounded-xl bg-amber-500 text-white text-xs font-bold"><i class="fa-solid fa-rotate mr-1"></i>Vérifier à nouveau</button>
+        <p class="text-xs mt-1 leading-relaxed">Deux options : attendre que le dispatch publie sa tournée, ou <b>créer ta tournée toi-même</b> — ajoute tes livraisons ci-dessous puis optimise dans l'onglet Tournées. Tout est enregistré en ligne et visible par le dispatch.</p>
+        <div class="mt-3 flex gap-2 flex-wrap">
+          <button type="button" data-action="add-stop" class="h-10 px-4 rounded-xl bg-emerald-600 text-white text-xs font-bold"><i class="fa-solid fa-plus mr-1"></i>Ajouter une livraison</button>
+          <button type="button" data-action="ws-repull" class="h-10 px-4 rounded-xl bg-amber-500 text-white text-xs font-bold"><i class="fa-solid fa-rotate mr-1"></i>Vérifier à nouveau</button>
+        </div>
       </div></div>`;
     return;
   }
@@ -1186,7 +1190,7 @@ async function doLogout() {
 /* ===== V5 — conducteur connecté & suivi temps réel ===== */
 const SCOPE_BACKUP = 'roadoptimizur.v3.scopebak';
 const SCOPE_ACTIVE = 'roadoptimizur.v3.scopeactive';
-let serverScope = null; let tourPushTimer = null; let liveTimer = null; let posWatchId = null; let lastPos = null; let lastPosPushAt = 0; let driverSyncTimer = null; let lastEditAt = 0;
+let serverScope = null; let tourPushTimer = null; let liveTimer = null; let posWatchId = null; let lastPos = null; let lastPosPushAt = 0; let driverSyncTimer = null; let lastEditAt = 0; let suppressPushUntil = 0;
 function fmtTimeFR(iso) { try { return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } }
 async function enterDriverPlanner(user) {
   if (!auth.online) return false;
@@ -1213,6 +1217,7 @@ async function enterDriverPlanner(user) {
 }
 function onDriverVisible() { if (!document.hidden && serverScope && auth.online) driverPullWeek({ silent: true }); }
 function applyOneTour(tour, date) {
+  suppressPushUntil = Date.now() + 5000;
   if (tour.depot) state.settings.depot = tour.depot;
   const keep = state.stops.filter((s) => s.date !== date || String(s.driverId) !== serverScope.driverId);
   const mapped = (tour.stops || []).map((st) => ({ ...st, date, driverId: serverScope.driverId, id: st.id || uid() }));
@@ -1305,13 +1310,13 @@ function scheduleTourPush() {
   tourPushTimer = setTimeout(pushTour, 1500);
 }
 async function pushTour() {
-  if (!serverScope) return;
+  if (!serverScope || Date.now() < suppressPushUntil) return;
   const date = currentDate();
-  if (!serverScope.dates[date]) return;
   const stops = state.stops.filter((s) => s.date === date && String(s.driverId) === serverScope.driverId)
     .sort((a, b) => (a.seq || 0) - (b.seq || 0));
-  const r = await api('/tour-save', { method: 'POST', body: { date, stops } });
-  if (r.ok && r.data && r.data.savedAt && serverScope.dates[date]) serverScope.dates[date].savedAt = r.data.savedAt;
+  if (!stops.length && !serverScope.dates[date]) return;
+  const r = await api('/tour-save', { method: 'POST', body: { date, stops, depot: state.settings.depot } });
+  if (r.ok && r.data && r.data.savedAt) serverScope.dates[date] = { savedAt: r.data.savedAt, count: stops.length };
   if (!r.ok && r.data?.error) toast(r.data.error, 'warn', 5000);
 }
 function startPosWatch() {

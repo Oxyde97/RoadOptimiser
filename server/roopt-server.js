@@ -274,11 +274,10 @@ async function handleApi(req, res, url, user, ip) {
     const date = String(b.date || new Date().toISOString().slice(0, 10));
     if (!Array.isArray(b.stops)) return { code: 400, obj: { error: 'payload attendu: {date, stops:[...]}' } };
     const row = db.prepare('SELECT payload FROM tours WHERE date = ? AND driver_id = ?').get(date, ref);
-    if (!row) return { code: 409, obj: { error: 'Aucune tournee publiee pour ce jour.' } };
-    let prev = {}; try { prev = JSON.parse(row.payload); } catch {}
-    const payload = { driverId: prev.driverId ?? ref, driverName: prev.driverName ?? user.name, stops: b.stops.slice(0, 500), savedBy: user.id, savedAt: new Date().toISOString() };
-    db.prepare('UPDATE tours SET payload = ?, updated = ? WHERE date = ? AND driver_id = ?')
-      .run(JSON.stringify(payload), new Date().toISOString(), date, ref);
+    let prev = {}; if (row) { try { prev = JSON.parse(row.payload); } catch {} }
+    const payload = { driverId: prev.driverId ?? ref, driverName: prev.driverName ?? user.name, depot: b.depot || prev.depot || null, stops: b.stops.slice(0, 500), savedAt: new Date().toISOString(), source: row ? (prev.source || 'admin') : 'driver' };
+    db.prepare('INSERT INTO tours(date, driver_id, payload, updated) VALUES(?,?,?,?) ON CONFLICT(date, driver_id) DO UPDATE SET payload = excluded.payload, updated = excluded.updated')
+      .run(date, ref, JSON.stringify(payload), new Date().toISOString());
     log('tour_save', date + ' — ' + b.stops.length + ' arrets', user.id, ip);
     return { code: 200, obj: { ok: true, savedAt: payload.savedAt } };
   }
