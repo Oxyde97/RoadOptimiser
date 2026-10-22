@@ -228,7 +228,7 @@ async function drawRoutes() {
 /* Onglets / rendu global                                              */
 /* ------------------------------------------------------------------ */
 
-const TABS = ['stops', 'drivers', 'routes', 'planning', 'analytics', 'settings', 'accounts', 'live'];
+const TABS = ['stops', 'routes', 'drivers', 'planning', 'analytics', 'accounts', 'live', 'settings'];
 
 function switchTab(tab) {
   if (tab !== 'live') { clearInterval(liveTimer); liveTimer = null; }
@@ -1172,13 +1172,20 @@ function doLogout() {
 
 /* ===== V5 — conducteur connecté & suivi temps réel ===== */
 const SCOPE_BACKUP = 'roadoptimizur.v3.scopebak';
+const SCOPE_ACTIVE = 'roadoptimizur.v3.scopeactive';
 let serverScope = null; let tourPushTimer = null; let liveTimer = null; let posWatchId = null; let lastPos = null; let lastPosPushAt = 0;
 function fmtTimeFR(iso) { try { return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } }
 async function enterDriverPlanner(user) {
   if (!auth.online) return false;
   const date = currentDate();
   const ref = String(user.driverRef ?? user.driver_ref ?? user.id);
-  if (!localStorage.getItem(SCOPE_BACKUP)) localStorage.setItem(SCOPE_BACKUP, JSON.stringify(state));
+  const active = localStorage.getItem(SCOPE_ACTIVE);
+  if (active !== ref) {
+    const bak0 = localStorage.getItem(SCOPE_BACKUP);
+    if (active && bak0) { try { Object.assign(state, JSON.parse(bak0)); } catch {} }
+    localStorage.setItem(SCOPE_BACKUP, JSON.stringify(state));
+    localStorage.setItem(SCOPE_ACTIVE, ref);
+  }
   const r = await api('/my-tour?date=' + encodeURIComponent(date));
   serverScope = { date, driverId: ref };
   if (r.ok && r.data.tour && Array.isArray(r.data.tour.stops)) {
@@ -1199,8 +1206,13 @@ async function enterDriverPlanner(user) {
 function clearDriverScope() {
   serverScope = null; stopPosWatch();
   const bak = localStorage.getItem(SCOPE_BACKUP);
-  if (bak) { try { Object.assign(state, JSON.parse(bak)); } catch {} localStorage.removeItem(SCOPE_BACKUP); save(); }
+  if (bak) { try { Object.assign(state, JSON.parse(bak)); } catch {} }
+  localStorage.removeItem(SCOPE_BACKUP); localStorage.removeItem(SCOPE_ACTIVE);
+  save();
   applyRoleChrome();
+}
+function ensureScopeConsistency() {
+  if (auth.user && auth.user.role === 'admin' && localStorage.getItem(SCOPE_ACTIVE)) clearDriverScope();
 }
 function scheduleTourPush() {
   if (!serverScope || !serverScope.pushEnabled || !auth.online || (auth.user && auth.user.role !== 'driver')) return;
@@ -1564,6 +1576,9 @@ function openDepotModal() {
         </div>
         <p class="text-[10px] text-slate-400 mt-1" data-geo-label>GPS ${d.lat}, ${d.lng}</p>
         <input type="hidden" name="lat" value="${d.lat}"><input type="hidden" name="lng" value="${d.lng}">
+        <label class="block text-xs font-semibold text-slate-600">Coordonnées GPS (modification manuelle possible)
+          <input name="gps" class="mt-1 w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" value="${d.lat && d.lng ? d.lat + ';' + d.lng : ''}" placeholder="43.2124;-0.3671">
+        </label>
       </div>
       <div class="flex gap-2">
         <button type="button" data-modal-close class="px-4 min-h-[48px] rounded-xl border border-slate-300 text-slate-600 text-sm font-semibold">Annuler</button>
@@ -1579,12 +1594,16 @@ async function submitDepotForm(form) {
   const address = String(fd.get('address') || '').trim();
   const oLat = Number(form.dataset.origLat) || 0;
   const oLng = Number(form.dataset.origLng) || 0;
-  const coordsChanged = lat !== oLat || lng !== oLng;
+  const gpsRaw = String(fd.get('gps') || '').trim().replace(/,/g, ';');
+  const gpsParts = gpsRaw.split(';').map((x) => Number(x.trim()));
+  const gpsManual = gpsParts.length === 2 && Number.isFinite(gpsParts[0]) && Number.isFinite(gpsParts[1]) && (gpsParts[0] !== oLat || gpsParts[1] !== oLng);
+  if (gpsManual) { lat = gpsParts[0]; lng = gpsParts[1]; }
+  const coordsChanged = gpsManual || lat !== oLat || lng !== oLng;
   const addressChanged = address !== (form.dataset.origAddress || '');
   if (address && (addressChanged || !coordsChanged) && (!lat || !lng || (addressChanged && !coordsChanged))) {
     const geo = await geocode(address);
     if (geo) { lat = geo.lat; lng = geo.lng; }
-    else toast('Géocodage impossible — anciennes coordonnées conservées. Réessaie via la loupe.', 'warn', 6000);
+    else toast('Adresse introuvable (Nominatim et Photon) — saisis le GPS en manuel dans le champ Coordonnées.', 'warn', 7000);
   }
   state.settings.depot = { name: String(fd.get('name') || 'Dépôt').trim(), address, lat, lng };
   save();
@@ -2244,6 +2263,7 @@ async function init() {
   const qs = new URLSearchParams(location.search);
   const isPublicLink = Boolean(qs.get('track') || qs.get('feedback'));
   const gate = await requireGate({ publicBypass: isPublicLink });
+  ensureScopeConsistency();
   updateHeaderChip();
   if (!isPublicLink && gate.user && gate.user.role === 'admin') {
     routeFromUrl();

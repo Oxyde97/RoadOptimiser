@@ -82,7 +82,27 @@ export function geocode(query) {
         return result;
       }
     } catch (err) {
-      console.warn('[routing] géocodage échoué', q, err);
+      console.warn('[routing] Nominatim échoué', q, err);
+    }
+    // repli Photon (mêmes données OSM, quota plus souple)
+    try {
+      const pr = await fetch(`https://photon.komoot.io/api/?limit=1&q=${encodeURIComponent(q)}`);
+      if (pr.ok) {
+        const gj = await pr.json();
+        const f = gj.features && gj.features[0];
+        if (f && f.geometry && f.geometry.coordinates) {
+          const lon = Number(f.geometry.coordinates[0]); const lat = Number(f.geometry.coordinates[1]);
+          if (Number.isFinite(lat) && Number.isFinite(lon)) {
+            const p = f.properties || {};
+            const result = { lat, lng: lon, display: [p.name, p.city, p.state].filter(Boolean).join(', ') || q };
+            cache[key] = { ...result, ts: Date.now() };
+            writeGeoCache(cache);
+            return result;
+          }
+        }
+      }
+    } catch (e2) {
+      console.warn('[routing] Photon échoué aussi', q, e2);
     }
     return null;
   });
