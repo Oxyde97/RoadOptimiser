@@ -441,6 +441,10 @@ export function openScanner(stop, opts = {}) {
           <input data-manual-code type="text" placeholder="Saisir le code…" class="flex-1 min-w-0 px-3 py-2.5 border border-slate-300 rounded-lg text-base">
           <button type="button" data-manual-ok class="px-4 min-h-[44px] bg-brand-600 text-white font-semibold rounded-lg text-sm">OK</button>
         </div>
+        <label class="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-dashed border-slate-300 rounded-lg text-xs text-slate-500 cursor-pointer">
+          <i class="fa-solid fa-camera"></i> Utiliser une photo de l’étiquette
+          <input type="file" accept="image/*" capture="environment" class="hidden" data-scan-photo>
+        </label>
         <div data-scan-status class="text-xs"></div>
       </div>
     </div>
@@ -451,6 +455,7 @@ export function openScanner(stop, opts = {}) {
   const status = overlay.querySelector('[data-scan-status]');
   const manual = overlay.querySelector('[data-manual-code]');
   let scanner = null;
+  let zxingReader = null;
   let stream = null;
   let raf = null;
   let closed = false;
@@ -459,19 +464,22 @@ export function openScanner(stop, opts = {}) {
     closed = true;
     if (raf) cancelAnimationFrame(raf);
     if (scanner) { scanner.stop().then(() => scanner.clear()).catch(() => {}); scanner = null; }
+    if (zxingReader) { try { zxingReader.stopContinuousDecode(); } catch {} zxingReader = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
   };
 
-  const handle = (code) => {
+  const handle = (code, match, format) => {
     const value = String(code || '').trim();
     if (!value) return;
-    const match = expected.length ? expected.some((e) => value.includes(e) || e.includes(value)) : null;
-    status.innerHTML = match === null
-      ? `<span class="text-emerald-600"><i class="fa-solid fa-check"></i> Code lu : ${escapeHtml(value)}</span>`
-      : match
-        ? `<span class="text-emerald-600"><i class="fa-solid fa-circle-check"></i> Code attendu confirmé : ${escapeHtml(value)}</span>`
-        : `<span class="text-amber-600"><i class="fa-solid fa-triangle-exclamation"></i> Code inattendu : ${escapeHtml(value)}</span>`;
-    opts.onScan?.(value, match);
+    const isGepir = value.includes('[)>') && /[\x1d\x1e\u241d\u241e]/.test(value);
+    const clean = isGepir ? value.replace(/[\x1e\x1d]/g, ' ').slice(0, 120) : value;
+    const match2 = expected.length ? expected.some((e) => clean.includes(e) || e.includes(clean)) : null;
+    status.innerHTML = match2 === null
+      ? `<span class="text-emerald-600"><i class="fa-solid fa-check"></i> ${isGepir ? 'Étiquette complète lue' : 'Code lu'} : ${escapeHtml(clean).slice(0, 80)}</span>`
+      : match2
+        ? `<span class="text-emerald-600"><i class="fa-solid fa-circle-check"></i> Code attendu confirmé : ${escapeHtml(clean).slice(0, 80)}</span>`
+        : `<span class="text-amber-600"><i class="fa-solid fa-triangle-exclamation"></i> Code inattendu : ${escapeHtml(clean).slice(0, 80)}</span>`;
+    opts.onScan?.(value, match2, format);
     cleanup();
     setTimeout(() => overlay.remove(), 550);
   };
@@ -482,6 +490,78 @@ export function openScanner(stop, opts = {}) {
   manual.focus();
 
   (async () => {
+    const canCamera = !!navigator.mediaDevices?.getUserMedia;
+
+    /* 1) Détecteur natif (Chrome/Android) — rapide, décode l'Aztec */
+    if ('BarcodeDetector' in window && canCamera) {
+      try {
+        const supported = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
+        const wanted = ['aztec', 'qr_code', 'data_matrix', 'code_128', 'code_39', 'code_93', 'ean_13', 'ean_8', 'pdf_417', 'itf', 'codabar']
+          .filter((f) => !supported.length || supported.includes(f));
+        if (wanted.includes('aztec') || wanted.includes('qr_code')) {
+          const video = document.createElement('video');
+          video.className = 'w-full h-[220px] object-cover';
+          video.setAttribute('playsinline', '');
+          reader.innerHTML = '';
+          reader.appendChild(video);
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
+          video.srcObject = stream;
+          await video.play();
+          const detector = new window.BarcodeDetector({ formats: wanted });
+          const loop = async () => {
+            if (closed) return;
+            try {
+              const codes = await detector.detect(video);
+              if (codes.length) { handle(codes[0].rawValue, null, codes[0].format); return; }
+            } catch {}
+            raf = requestAnimationFrame(loop);
+          };
+          loop();
+          return;
+        }
+      } catch (err) {
+        console.warn('[scan] BarcodeDetector indisponible', err);
+        if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+        reader.innerHTML = '';
+      }
+    }
+
+    /* 2) ZXing (tous navigateurs) — lecteur Aztec complet des étiquettes transporteur */
+    if (window.ZXing?.BrowserMultiFormatReader && canCamera) {
+      try {
+        const Z = window.ZXing;
+        const hints = new Map([[Z.DecodeHintType.POSSIBLE_FORMATS, [
+          Z.BarcodeFormat.AZTEC, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX,
+          Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93,
+          Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.PDF_417, Z.BarcodeFormat.ITF,
+        ]]]);
+        reader.innerHTML = '<span class="text-slate-400 text-xs"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Ouverture caméra…</span>';
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
+        const video = document.createElement('video');
+        video.className = 'w-full h-[220px] object-cover';
+        video.setAttribute('playsinline', '');
+        reader.innerHTML = '';
+        reader.appendChild(video);
+        video.srcObject = stream;
+        await video.play();
+        zxingReader = new Z.BrowserMultiFormatReader(hints, { delayBetweenScanAttempt: 250 });
+        zxingReader.decodeFromVideoElement(video, (result) => {
+          if (!result || closed || !result.text) return;
+          const fmt = Object.keys(Z.BarcodeFormat).find((k) => Z.BarcodeFormat[k] === result.format) || null;
+          try { zxingReader?.stopContinuousDecode(); } catch {}
+          handle(result.text, null, fmt);
+        });
+        return;
+      } catch (err) {
+        console.warn('[scan] zxing indisponible', err);
+        try { zxingReader?.stopContinuousDecode(); } catch {}
+        zxingReader = null;
+        if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+        reader.innerHTML = '';
+      }
+    }
+
+    /* 3) html5-qrcode (legacy QR/1D — ne décode pas l'Aztec) */
     if (window.Html5Qrcode) {
       try {
         scanner = new window.Html5Qrcode('scan-reader', { verbose: false });
@@ -500,36 +580,31 @@ export function openScanner(stop, opts = {}) {
       }
     }
 
-    if ('BarcodeDetector' in window && navigator.mediaDevices?.getUserMedia) {
-      try {
-        const video = document.createElement('video');
-        video.className = 'w-full h-[220px] object-cover';
-        video.setAttribute('playsinline', '');
-        reader.innerHTML = '';
-        reader.appendChild(video);
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        video.srcObject = stream;
-        await video.play();
-        const detector = new window.BarcodeDetector();
-        const loop = async () => {
-          if (closed) return;
-          try {
-            const codes = await detector.detect(video);
-            if (codes.length) { handle(codes[0].rawValue); return; }
-          } catch {}
-          raf = requestAnimationFrame(loop);
-        };
-        loop();
-        return;
-      } catch (err) {
-        console.warn('[scan] BarcodeDetector indisponible', err);
-        if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
-      }
-    }
-
-    reader.innerHTML = '<span class="text-slate-400 text-xs p-6 text-center"><i class="fa-solid fa-keyboard mr-1"></i> Caméra indisponible — saisissez le code ci-dessous.</span>';
+    reader.innerHTML = '<span class="text-slate-400 text-xs p-6 text-center"><i class="fa-solid fa-keyboard mr-1"></i> Caméra indisponible — saisissez le code ou utilisez une photo.</span>';
     manual.focus();
   })();
+
+  /* Photo de l'étiquette → décodage hors-live (utile lumière faible / vieux téléphones) */
+  overlay.querySelector('[data-scan-photo]')?.addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    ev.target.value = '';
+    if (!file) return;
+    if (!window.ZXing?.BrowserMultiFormatReader) {
+      status.innerHTML = '<span class="text-amber-600">Décodeur photo non chargé — vérifiez la connexion (le script zxing manque).</span>';
+      return;
+    }
+    status.innerHTML = '<span class="text-brand-600"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Analyse de la photo…</span>';
+    const url = URL.createObjectURL(file);
+    try {
+      const res = await new window.ZXing.BrowserMultiFormatReader().decodeFromImageUrl(url);
+      URL.revokeObjectURL(url);
+      if (res?.text) handle(res.text);
+      else status.innerHTML = '<span class="text-amber-600">Aucun code lisible sur la photo — recadrez sur le QR de l’étiquette.</span>';
+    } catch {
+      URL.revokeObjectURL(url);
+      status.innerHTML = '<span class="text-amber-600">Photo non décodée — recadrez sur le QR de l’étiquette.</span>';
+    }
+  });
 
   return { close: () => { cleanup(); overlay.remove(); } };
 }

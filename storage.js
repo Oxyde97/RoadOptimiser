@@ -470,3 +470,88 @@ export function ensureDate(state, date) {
   if (!state.planning.dates.includes(date)) state.planning.dates.push(date);
   state.planning.dates.sort();
 }
+
+/* ------------------------------------------------------------------ */
+/* Étiquette transporteur — code Aztec GEPIR (Chronopost/Chronofresh) */
+/* ------------------------------------------------------------------ */
+
+const GEPIR_RS = '\x1e', GEPIR_GS = '\x1d', GEPIR_US = '\x1f';
+
+/** Certains décodeurs renvoient les séparateurs GS1 sous forme de symboles
+ *  visibles (U+241E etc.) au lieu des caractères de contrôle : on normalise. */
+function normalizeGepir(text) {
+  return String(text || '')
+    .replace(/\u241e/g, GEPIR_RS)
+    .replace(/\u241d/g, GEPIR_GS)
+    .replace(/\u241f/g, GEPIR_US)
+    .replace(/\u2420/g, ' ');
+}
+
+export function looksLikeGepirLabel(text) {
+  const t = normalizeGepir(text);
+  return t.includes('[)>') && (t.includes(GEPIR_RS) || t.includes(GEPIR_GS));
+}
+
+/** Parse le payload Aztec d'une étiquette Chronopost/Chronofresh.
+ *  Renvoie { tracking, recipient:{...}, sender:{...}, orderRef, weightKg,
+ *  bestBefore, shipDate, fullAddress, display } ou null si ce n'est pas du GEPIR. */
+export function parseLabelPayload(raw) {
+  let text = normalizeGepir(raw);
+  if (!text.includes('[)>')) return null;
+  const out = { recipient: {}, sender: {}, raw: String(raw || '') };
+  const usBlock = (seg) => {
+    for (const f of seg.split(GEPIR_GS)) if (f.includes(GEPIR_US)) return f.split(GEPIR_US).map((s) => s.trim());
+    return [];
+  };
+  for (const seg of text.split(GEPIR_RS)) {
+    const fields = seg.split(GEPIR_GS).map((f) => f.trim());
+    const head = fields[0];
+    if (!head) continue;
+    if (head === '01') {
+      const g = fields.slice(1).filter(Boolean);
+      const m = seg.match(/XU\d{10,}/);
+      if (m) out.tracking = m[0];
+      const zm = g.find((f) => /^00\d{5}$/.test(f));
+      if (zm) out.recipient.zip = zm.slice(2, 7);
+      const words = seg.split(GEPIR_GS).filter((f) => /[A-Za-z]{3}/.test(f) && !f.includes('GEOP'));
+      if (words.length >= 3) {
+        out.recipient.street = words[0];
+        out.recipient.city = words[1];
+        out.recipient.company = words[words.length - 1];
+      }
+      const kg = seg.match(/(\d{1,3})KG/);
+      if (kg) out.weightKg = Number(kg[1]);
+    } else if (head === '07' && fields[1] === 'G03') {
+      const a = usBlock(seg);
+      if (a[0]) out.recipient.company = a[0];
+      if (a[1]) out.recipient.name = a[1];
+      if (a[2]) out.recipient.contact = a[2];
+      if (a[3]) out.recipient.phone = a[3];
+      const em = a.find((x) => x.includes('@'));
+      if (em) out.recipient.email = em;
+      const extra = a.slice(8).find(Boolean);
+      if (extra) out.recipient.address2 = extra;
+      const ref = seg.match(/[A-Z]{2}\d{4}-\d{4}/);
+      if (ref) out.orderRef = ref[0];
+    } else if (head === '07' && fields[1] === 'S010') {
+      const a = usBlock(seg);
+      out.sender = {
+        name: a[0] || '', phone: a[1] || '', contact: a[2] || '',
+        street: a[4] || '', city: a[6] || '', zip: a[7] || '',
+      };
+    } else if (head === '07' && fields[1] && fields[1].startsWith('D001011')) {
+      const g = fields.filter(Boolean).slice(2);
+      out.shipDate = g[0] || null;
+      out.itemRef = g[1] || null;
+    } else if (head === '07' && fields[1] && fields[1].startsWith('D001031')) {
+      const g = fields.filter(Boolean).slice(2);
+      out.bestBefore = g[0] || null;
+    }
+  }
+  if (!out.recipient.name && !out.recipient.street) return null;
+  const r = out.recipient;
+  const zipCity = r.zip && r.city ? `${r.zip} ${r.city}` : (r.city || '');
+  out.fullAddress = [r.street, zipCity].filter(Boolean).join(', ');
+  out.display = [r.company || r.name, r.address2, out.fullAddress].filter(Boolean).join(' — ');
+  return out;
+}

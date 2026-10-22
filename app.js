@@ -15,7 +15,7 @@ import {
   exportJSON, importJSONFile, parseCSV, csvRowToStop, stopsToCSV, download, csvStopsFilename,
   todayISO, addDaysISO, mondayISO, formatDateFR, formatDateTimeFR, ensureDate,
   getDriver, getStop, getDriverRoute, uid, minutesFromHHMM, isoAt,
-  parseParcelBarcode,
+  parseParcelBarcode, parseLabelPayload,
 } from './storage.js';
 import { auth, api, mountLogin, logout, requireGate, showGateAgain, resolveApi } from './auth.js';
 import { initDriverServerView } from './driver-server.js';
@@ -444,6 +444,8 @@ function renderStopsList() {
 
 /** Scan d'étiquette colis → commande pré-remplie (CP extrait + géocodé, n° de suivi conservé). */
 async function handleParcelScan(value) {
+  const gepir = parseLabelPayload(value);
+  if (gepir?.tracking) value = gepir.tracking;
   const info = parseParcelBarcode(value);
   if (!info) { toast('Code illisible.', 'error'); return; }
   const preset = {
@@ -466,6 +468,62 @@ async function handleParcelScan(value) {
     toast('Aucun code postal reconnu dans ce numéro — complétez l’adresse.', 'warn', 5000);
   }
   openStopModal(null, null, preset);
+}
+
+/** Remplit le formulaire « Nouvel arrêt » depuis un scan d'étiquette.
+ *  Aztec/GEPIR → tous les champs destinataire ; Code128 simple → suivi + CP. */
+function fillStopFormFromScan(form, v) {
+  const label = parseLabelPayload(v);
+  const info = label
+    ? { tracking: label.tracking || '', cp: label.recipient?.zip || null, raw: v }
+    : parseParcelBarcode(v);
+  if (!info || !info.tracking) { toast('Code illisible.', 'error'); return; }
+  const q = (n) => form.querySelector(`[name=${n}]`);
+  const nameI = q('name');
+  const addrI = form.querySelector('[data-address]');
+  const latI = q('lat');
+  const lngI = q('lng');
+  const noteI = q('notes');
+  const hid = q('barcodes');
+  const addrForGeo = label ? label.fullAddress : (info.cp || '');
+  if (label) {
+    const r = label.recipient;
+    if (nameI && !nameI.value.trim()) nameI.value = r.company || r.name || `Colis ${String(label.tracking).slice(-8)}`;
+    if (addrI && !addrI.value.trim() && label.fullAddress) addrI.value = label.fullAddress;
+    const phoneI = q('phone'); if (phoneI && !phoneI.value.trim() && r.phone) phoneI.value = r.phone;
+    const mailI = q('email'); if (mailI && !mailI.value.trim() && r.email) mailI.value = r.email;
+    const wI = q('weightKg'); if (wI && !Number(wI.value) && label.weightKg) wI.value = label.weightKg;
+    if (noteI && !String(noteI.value).includes('N° de suivi')) {
+      const bits = [
+        `N° de suivi : ${label.tracking || info.cp || '—'}`,
+        label.orderRef ? `Réf. commande : ${label.orderRef}` : '',
+        r.name ? `Destinataire : ${r.name}` : '',
+        r.address2 ? `Point dit : ${r.address2}` : '',
+        label.bestBefore ? `DLC : ${label.bestBefore}` : '',
+      ].filter(Boolean);
+      noteI.value = (noteI.value ? noteI.value + '\n' : '') + bits.join('\n');
+    }
+  } else {
+    if (nameI && !nameI.value.trim()) nameI.value = `Colis ${info.tracking.slice(-8)}`;
+    if (addrI && info.cp && !addrI.value.trim()) addrI.value = info.cp;
+    if (noteI && !String(noteI.value).includes('N° de suivi')) noteI.value = (noteI.value ? noteI.value + '\n' : '') + `N° de suivi : ${info.raw}`;
+  }
+  if (hid) {
+    const cur = String(hid.value || '').split('|').filter(Boolean);
+    const rawShort = String(info.raw).replace(/[\x1e\x1d\x1f\u241d\u241e\u241f\u2420]/g, ' ').slice(0, 200);
+    hid.value = [...new Set([...cur, info.tracking, rawShort])].join('|');
+  }
+  if (addrForGeo && latI && !Number(latI.value)) {
+    const lab = form.querySelector('[data-geo-label]');
+    if (lab) lab.textContent = 'Géocodage en cours…';
+    geocode(addrForGeo).then((geo) => {
+      if (!geo) { if (lab) lab.textContent = 'Adresse introuvable — vérifiez la saisie.'; return; }
+      latI.value = geo.lat; lngI.value = geo.lng;
+      if (addrI && !addrI.value.trim()) addrI.value = addrForGeo;
+      if (lab) lab.textContent = `GPS ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)} — ${String(geo.display).slice(0, 70)}`;
+    }).catch(() => {});
+  }
+  toast(label ? `Étiquette lue : ${label.recipient.city || label.recipient.zip || ''} — champs remplis.` : 'Code-barres ajouté à la commande.', 'success');
 }
 
 function openStopModal(stop = null, presetDate = null, preset = null) {
@@ -1985,33 +2043,7 @@ async function handlePanelClick(ev) {
     case 'scan-into-stop': {
       const form = btn.closest('form');
       if (!form) break;
-      openScanner({ expectedCodes: [], barcodes: [] }, { onScan: (v) => {
-        const info = parseParcelBarcode(v);
-        if (!info) { toast('Code illisible.', 'error'); return; }
-        const nameI = form.querySelector('[name=name]');
-        const addrI = form.querySelector('[data-address]');
-        const latI = form.querySelector('[name=lat]');
-        const lngI = form.querySelector('[name=lng]');
-        const noteI = form.querySelector('[name=notes]');
-        const hid = form.querySelector('[name=barcodes]');
-        if (nameI && !nameI.value.trim()) nameI.value = `Colis ${info.tracking.slice(-8)}`;
-        if (addrI && info.cp && !addrI.value.trim()) addrI.value = info.cp;
-        if (noteI && !String(noteI.value).includes('N° de suivi')) noteI.value = (noteI.value ? noteI.value + '\n' : '') + `N° de suivi : ${info.raw}`;
-        if (hid) {
-          const cur = String(hid.value || '').split('|').filter(Boolean);
-          hid.value = [...new Set([...cur, info.tracking, info.raw])].join('|');
-        }
-        if (info.cp && latI && !Number(latI.value)) {
-          geocode(info.cp).then((geo) => {
-            if (!geo) return;
-            latI.value = geo.lat; lngI.value = geo.lng;
-            if (addrI && !addrI.value.trim()) addrI.value = `${info.cp} ${String(geo.display || '').split(',')[0]}`;
-            const lab = form.querySelector('[data-geo-label]');
-            if (lab) lab.textContent = `GPS ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)} — ${String(geo.display).slice(0, 70)}`;
-          }).catch(() => {});
-        }
-        toast('Code-barres ajouté à la commande.', 'success');
-      } });
+      openScanner({ expectedCodes: [], barcodes: [] }, { onScan: (v) => fillStopFormFromScan(form, v) });
       break;
     }
     case 'edit-stop': if (stop) openStopModal(stop); break;
@@ -2194,6 +2226,10 @@ function handleModalClick(ev) {
     resolveGeo(form.querySelector('[data-address]'), form.querySelector('[name=lat]'), form.querySelector('[name=lng]'), form.querySelector('[data-geo-label]')).then((geo) => {
       if (geo) toast('Adresse géocodée.', 'success');
     });
+  } else if (action === 'scan-into-stop') {
+    const form = btn.closest('form');
+    if (!form) return;
+    openScanner({ expectedCodes: [], barcodes: [] }, { onScan: (v) => fillStopFormFromScan(form, v) });
   }
 }
 
