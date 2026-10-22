@@ -2043,7 +2043,7 @@ async function handlePanelClick(ev) {
     case 'scan-into-stop': {
       const form = btn.closest('form');
       if (!form) break;
-      openScanner({ expectedCodes: [], barcodes: [] }, { onScan: (v) => fillStopFormFromScan(form, v) });
+      openScanner({ expectedCodes: [], barcodes: [] }, { preferLabel: true, onScan: (v) => fillStopFormFromScan(form, v) });
       break;
     }
     case 'edit-stop': if (stop) openStopModal(stop); break;
@@ -2229,7 +2229,7 @@ function handleModalClick(ev) {
   } else if (action === 'scan-into-stop') {
     const form = btn.closest('form');
     if (!form) return;
-    openScanner({ expectedCodes: [], barcodes: [] }, { onScan: (v) => fillStopFormFromScan(form, v) });
+    openScanner({ expectedCodes: [], barcodes: [] }, { preferLabel: true, onScan: (v) => fillStopFormFromScan(form, v) });
   }
 }
 

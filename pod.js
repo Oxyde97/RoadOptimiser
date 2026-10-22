@@ -421,6 +421,8 @@ export function openScanner(stop, opts = {}) {
     ...(Array.isArray(stop.expectedCodes) ? stop.expectedCodes : []),
     ...(Array.isArray(stop.barcodes) ? stop.barcodes : []),
   ].map(String);
+  const preferLabel = Boolean(opts.preferLabel);
+  const LABEL_WAIT_MS = Number(opts.labelWaitMs || 6000);
 
   document.getElementById('scan-modal')?.remove();
   const overlay = document.createElement('div');
@@ -430,13 +432,16 @@ export function openScanner(stop, opts = {}) {
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
       <div class="px-4 py-3 flex items-center justify-between border-b border-slate-200">
         <h3 class="font-bold text-slate-900"><i class="fa-solid fa-barcode text-brand-500 mr-1"></i> Scanner</h3>
-        <button type="button" data-scan-close class="w-10 h-10 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500"><i class="fa-solid fa-xmark"></i></button>
+        <div class="flex items-center">
+          <button type="button" data-torch class="hidden w-10 h-10 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500" title="Flash"><i class="fa-solid fa-lightbulb"></i></button>
+          <button type="button" data-scan-close class="w-10 h-10 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500"><i class="fa-solid fa-xmark"></i></button>
+        </div>
       </div>
       <div class="p-4 space-y-3">
         <div id="scan-reader" class="w-full min-h-[220px] bg-slate-900 rounded-xl overflow-hidden flex items-center justify-center text-slate-400 text-xs">
           <span><i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Initialisation caméra…</span>
         </div>
-        <p class="text-xs text-slate-500">Placez le code-barres dans le cadre. La saisie manuelle reste disponible.</p>
+        <p class="text-xs text-slate-500" data-scan-hint>${preferLabel ? 'Cadre le <b>grand QR</b> de l’étiquette (à droite de l’adresse client) — le code-barres du bas sert de repli.' : 'Placez le code-barres dans le cadre. La saisie manuelle reste disponible.'}</p>
         <div class="flex gap-2">
           <input data-manual-code type="text" placeholder="Saisir le code…" class="flex-1 min-w-0 px-3 py-2.5 border border-slate-300 rounded-lg text-base">
           <button type="button" data-manual-ok class="px-4 min-h-[44px] bg-brand-600 text-white font-semibold rounded-lg text-sm">OK</button>
@@ -468,10 +473,18 @@ export function openScanner(stop, opts = {}) {
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
   };
 
-  const handle = (code, match, format) => {
+  const classify = (value) => {
+    const v = String(value || '');
+    if (v.includes('[)>') && /[\x1d\x1e\u241d\u241e]/.test(v)) return 'label';
+    if (/^[0-9A-Z]{8,}$/.test(v.replace(/[\s.\-\/%]/g, ''))) return 'tracking';
+    return 'other';
+  };
+
+  const handle = (code, format) => {
     const value = String(code || '').trim();
-    if (!value) return;
-    const isGepir = value.includes('[)>') && /[\x1d\x1e\u241d\u241e]/.test(value);
+    if (!value || closed) return;
+    if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+    const isGepir = classify(value) === 'label';
     const clean = isGepir ? value.replace(/[\x1e\x1d]/g, ' ').slice(0, 120) : value;
     const match2 = expected.length ? expected.some((e) => clean.includes(e) || e.includes(clean)) : null;
     status.innerHTML = match2 === null
@@ -484,99 +497,154 @@ export function openScanner(stop, opts = {}) {
     setTimeout(() => overlay.remove(), 550);
   };
 
+  let fallback = null;
+  let fallbackTimer = null;
+  let lastHint = 0;
+  const onCode = (value, format) => {
+    if (closed) return;
+    const kind = classify(value);
+    if (!preferLabel || kind === 'label') { handle(value, format); return; }
+    if (kind === 'tracking') {
+      fallback = { value, format };
+      status.innerHTML = '<span class="text-brand-600"><i class="fa-solid fa-magnifying-glass mr-1"></i> N° de suivi lu — je cherche encore le QR d’adresse, sinon je l’utiliserai dans quelques secondes.</span>';
+      if (!fallbackTimer) fallbackTimer = setTimeout(() => { if (fallback) handle(fallback.value, fallback.format); }, LABEL_WAIT_MS);
+      return;
+    }
+    const now = Date.now();
+    if (now - lastHint > 1500) {
+      lastHint = now;
+      status.innerHTML = '<span class="text-slate-500"><i class="fa-solid fa-qrcode mr-1"></i> Code non reconnu — cadre le QR à droite de l’adresse client.</span>';
+    }
+  };
+
   overlay.querySelectorAll('[data-scan-close]').forEach((b) => b.addEventListener('click', () => { cleanup(); overlay.remove(); }));
   overlay.querySelector('[data-manual-ok]').addEventListener('click', () => handle(manual.value));
   manual.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') handle(manual.value); });
   manual.focus();
 
+  const pickBest = (codes) => codes.find((c) => classify(c.rawValue || c.text) === 'label') || codes[0];
+
+  const getCam = async () => {
+    const tries = [
+      { video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } },
+      { video: { facingMode: { exact: 'environment' }, width: { ideal: 1280 } } },
+      { video: { facingMode: 'environment' } },
+      { video: true },
+    ];
+    let lastErr;
+    for (const c of tries) {
+      try { return await navigator.mediaDevices.getUserMedia(c); } catch (err) { lastErr = err; }
+    }
+    throw lastErr;
+  };
+
+  const setupTorch = (s) => {
+    try {
+      const track = s.getVideoTracks()[0];
+      const caps = track?.getCapabilities?.() || {};
+      if (!caps.torch) return;
+      const btn = overlay.querySelector('[data-torch]');
+      btn.classList.remove('hidden');
+      let on = false;
+      btn.addEventListener('click', () => {
+        on = !on;
+        btn.classList.toggle('bg-amber-200', on);
+        track.applyConstraints({ advanced: [{ torch: on }] }).catch(() => {});
+      });
+    } catch {}
+  };
+
+  const mountVideo = (s) => {
+    const video = document.createElement('video');
+    video.className = 'w-full h-[220px] object-cover';
+    video.setAttribute('playsinline', '');
+    reader.innerHTML = '';
+    reader.appendChild(video);
+    video.srcObject = s;
+    setupTorch(s);
+    return video;
+  };
+
   (async () => {
     const canCamera = !!navigator.mediaDevices?.getUserMedia;
 
-    /* 1) Détecteur natif (Chrome/Android) — rapide, décode l'Aztec */
-    if ('BarcodeDetector' in window && canCamera) {
-      try {
-        const supported = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
-        const wanted = ['aztec', 'qr_code', 'data_matrix', 'code_128', 'code_39', 'code_93', 'ean_13', 'ean_8', 'pdf_417', 'itf', 'codabar']
-          .filter((f) => !supported.length || supported.includes(f));
-        if (wanted.includes('aztec') || wanted.includes('qr_code')) {
-          const video = document.createElement('video');
-          video.className = 'w-full h-[220px] object-cover';
-          video.setAttribute('playsinline', '');
-          reader.innerHTML = '';
-          reader.appendChild(video);
-          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
-          video.srcObject = stream;
-          await video.play();
-          const detector = new window.BarcodeDetector({ formats: wanted });
-          const loop = async () => {
-            if (closed) return;
-            try {
-              const codes = await detector.detect(video);
-              if (codes.length) { handle(codes[0].rawValue, null, codes[0].format); return; }
-            } catch {}
-            raf = requestAnimationFrame(loop);
-          };
-          loop();
-          return;
+    /* Chaîne de décodage : natif si l'Aztec est supporté (rapide), sinon zxing
+       (seul à lire l'Aztec des étiquettes sur les anciens Chrome/WebView/Firefox). */
+    if (canCamera) {
+      const supported = 'BarcodeDetector' in window ? ((await window.BarcodeDetector.getSupportedFormats?.().catch(() => [])) || []) : null;
+      const nativeAztec = supported !== null && (supported.length === 0 || supported.includes('aztec'));
+      const order = [];
+      if (nativeAztec) order.push('native');
+      if (window.ZXing?.BrowserMultiFormatReader) order.push('zxing');
+      if (supported !== null && !order.includes('native')) order.push('native');
+      if (window.Html5Qrcode) order.push('html5');
+
+      for (const engine of order) {
+        if (closed) return;
+        try {
+          if (engine === 'native') {
+            const supported = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
+            const wanted = ['aztec', 'qr_code', 'data_matrix', 'code_128', 'code_39', 'code_93', 'ean_13', 'ean_8', 'pdf_417', 'itf', 'codabar']
+              .filter((f) => !supported.length || supported.includes(f));
+            stream = await getCam();
+            const video = mountVideo(stream);
+            await video.play();
+            const detector = new window.BarcodeDetector({ formats: wanted });
+            const loop = async () => {
+              if (closed) return;
+              try {
+                const codes = await detector.detect(video);
+                if (codes.length) {
+                  const best = pickBest(codes);
+                  if (classify(best.rawValue) === 'label') { handle(best.rawValue, best.format); return; }
+                  onCode(best.rawValue, best.format);
+                  if (closed) return;
+                }
+              } catch {}
+              raf = requestAnimationFrame(loop);
+            };
+            loop();
+            return;
+          }
+          if (engine === 'zxing') {
+            const Z = window.ZXing;
+            const hints = new Map([
+              [Z.DecodeHintType.POSSIBLE_FORMATS, [
+                Z.BarcodeFormat.AZTEC, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX,
+                Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93,
+                Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.PDF_417, Z.BarcodeFormat.ITF,
+              ]],
+              [Z.DecodeHintType.TRY_HARDER, true],
+            ]);
+            reader.innerHTML = '<span class="text-slate-400 text-xs"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Ouverture caméra…</span>';
+            stream = await getCam();
+            const video = mountVideo(stream);
+            await video.play();
+            zxingReader = new Z.BrowserMultiFormatReader(hints, { delayBetweenScanAttempt: 200 });
+            zxingReader.decodeFromVideoElement(video, (result) => {
+              if (!result || closed || !result.text) return;
+              const fmt = Object.keys(Z.BarcodeFormat).find((k) => Z.BarcodeFormat[k] === result.format) || null;
+              onCode(result.text, fmt);
+            });
+            return;
+          }
+          if (engine === 'html5') {
+            scanner = new window.Html5Qrcode('scan-reader', { verbose: false });
+            await scanner.start(
+              { facingMode: 'environment' },
+              { fps: 10, qrbox: { width: 260, height: 200 } },
+              (text) => { if (!closed) onCode(text, null); },
+              () => {}
+            );
+            return;
+          }
+        } catch (err) {
+          console.warn(`[scan] moteur ${engine} indisponible`, err);
+          try { if (engine === 'zxing') zxingReader?.stopContinuousDecode(); } catch {}
+          zxingReader = null;
+          if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+          reader.innerHTML = '<span class="text-slate-400 text-xs"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Nouvelle tentative…</span>';
         }
-      } catch (err) {
-        console.warn('[scan] BarcodeDetector indisponible', err);
-        if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
-        reader.innerHTML = '';
-      }
-    }
-
-    /* 2) ZXing (tous navigateurs) — lecteur Aztec complet des étiquettes transporteur */
-    if (window.ZXing?.BrowserMultiFormatReader && canCamera) {
-      try {
-        const Z = window.ZXing;
-        const hints = new Map([[Z.DecodeHintType.POSSIBLE_FORMATS, [
-          Z.BarcodeFormat.AZTEC, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX,
-          Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93,
-          Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.PDF_417, Z.BarcodeFormat.ITF,
-        ]]]);
-        reader.innerHTML = '<span class="text-slate-400 text-xs"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Ouverture caméra…</span>';
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
-        const video = document.createElement('video');
-        video.className = 'w-full h-[220px] object-cover';
-        video.setAttribute('playsinline', '');
-        reader.innerHTML = '';
-        reader.appendChild(video);
-        video.srcObject = stream;
-        await video.play();
-        zxingReader = new Z.BrowserMultiFormatReader(hints, { delayBetweenScanAttempt: 250 });
-        zxingReader.decodeFromVideoElement(video, (result) => {
-          if (!result || closed || !result.text) return;
-          const fmt = Object.keys(Z.BarcodeFormat).find((k) => Z.BarcodeFormat[k] === result.format) || null;
-          try { zxingReader?.stopContinuousDecode(); } catch {}
-          handle(result.text, null, fmt);
-        });
-        return;
-      } catch (err) {
-        console.warn('[scan] zxing indisponible', err);
-        try { zxingReader?.stopContinuousDecode(); } catch {}
-        zxingReader = null;
-        if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
-        reader.innerHTML = '';
-      }
-    }
-
-    /* 3) html5-qrcode (legacy QR/1D — ne décode pas l'Aztec) */
-    if (window.Html5Qrcode) {
-      try {
-        scanner = new window.Html5Qrcode('scan-reader', { verbose: false });
-        await scanner.start(
-          { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 240, height: 180 } },
-          (text) => { if (!closed) handle(text); },
-          () => {}
-        );
-        return;
-      } catch (err) {
-        console.warn('[scan] html5-qrcode indisponible', err);
-        try { await scanner?.clear(); } catch {}
-        scanner = null;
-        reader.innerHTML = '';
       }
     }
 
@@ -584,7 +652,7 @@ export function openScanner(stop, opts = {}) {
     manual.focus();
   })();
 
-  /* Photo de l'étiquette → décodage hors-live (utile lumière faible / vieux téléphones) */
+  /* Photo de l'étiquette → décodage hors-live, tous les codes de l'image. */
   overlay.querySelector('[data-scan-photo]')?.addEventListener('change', async (ev) => {
     const file = ev.target.files?.[0];
     ev.target.value = '';
@@ -596,9 +664,28 @@ export function openScanner(stop, opts = {}) {
     status.innerHTML = '<span class="text-brand-600"><i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Analyse de la photo…</span>';
     const url = URL.createObjectURL(file);
     try {
-      const res = await new window.ZXing.BrowserMultiFormatReader().decodeFromImageUrl(url);
+      const img = new Image();
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = url; });
+      const zx = new window.ZXing.BrowserMultiFormatReader();
+      let best = null;
+      for (const mult of [1, 1.5, 2]) {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.min(2400, Math.round(img.width * mult));
+        canvas.height = Math.round(img.height * mult);
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        try {
+          const res = await zx.decodeFromCanvas(canvas);
+          if (res?.text) {
+            if (classify(res.text) === 'label') { best = res.text; break; }
+            best = best || res.text;
+          }
+        } catch {}
+        if (best && classify(best) === 'label') break;
+      }
       URL.revokeObjectURL(url);
-      if (res?.text) handle(res.text);
+      if (best) handle(best);
       else status.innerHTML = '<span class="text-amber-600">Aucun code lisible sur la photo — recadrez sur le QR de l’étiquette.</span>';
     } catch {
       URL.revokeObjectURL(url);
