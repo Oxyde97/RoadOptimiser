@@ -228,9 +228,10 @@ async function drawRoutes() {
 /* Onglets / rendu global                                              */
 /* ------------------------------------------------------------------ */
 
-const TABS = ['stops', 'drivers', 'routes', 'planning', 'analytics', 'settings', 'accounts'];
+const TABS = ['stops', 'drivers', 'routes', 'planning', 'analytics', 'settings', 'accounts', 'live'];
 
 function switchTab(tab) {
+  if (tab !== 'live') { clearInterval(liveTimer); liveTimer = null; }
   if (!TABS.includes(tab)) tab = 'stops';
   activeTab = tab;
   $$('#planner-tabs [data-tab]').forEach((b) => {
@@ -252,9 +253,11 @@ function renderPanel() {
   else if (activeTab === 'analytics') renderAnalytics(p, state, currentDate());
   else if (activeTab === 'settings') renderSettings();
   else if (activeTab === 'accounts') renderAccounts();
+  else if (activeTab === 'live') renderLive(p);
 }
 
 function renderAll() {
+  scheduleTourPush();
   const input = document.getElementById('active-date');
   if (input) input.value = currentDate();
   const mobileInput = document.getElementById('active-date-mobile');
@@ -1160,9 +1163,101 @@ function podRowHTML(field) {
 
 function doLogout() {
   logout();
+  clearDriverScope();
   updateHeaderChip();
   toast('Déconnecté du serveur.', 'info');
   showGateAgain(() => { updateHeaderChip(); routeFromUrl(); });
+}
+
+
+/* ===== V5 — conducteur connecté & suivi temps réel ===== */
+const SCOPE_BACKUP = 'roadoptimizur.v3.scopebak';
+let serverScope = null; let tourPushTimer = null; let liveTimer = null; let posWatchId = null; let lastPos = null; let lastPosPushAt = 0;
+function fmtTimeFR(iso) { try { return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } }
+async function enterDriverPlanner(user) {
+  if (!auth.online) return false;
+  const date = currentDate();
+  const ref = String(user.driverRef ?? user.driver_ref ?? user.id);
+  if (!localStorage.getItem(SCOPE_BACKUP)) localStorage.setItem(SCOPE_BACKUP, JSON.stringify(state));
+  const r = await api('/my-tour?date=' + encodeURIComponent(date));
+  serverScope = { date, driverId: ref };
+  if (r.ok && r.data.tour && Array.isArray(r.data.tour.stops)) {
+    const t = r.data.tour;
+    if (t.depot) state.settings.depot = t.depot;
+    state.drivers = [{ id: ref, name: t.driverName || user.name, color: '#0ea5e9', phone: user.phone || '' }];
+    state.stops = t.stops.map((st) => ({ ...st, date, driverId: ref, id: st.id || uid() }));
+    save();
+  }
+  applyRoleChrome();
+  startPosWatch();
+  serverScope.pushEnabled = false;
+  showOnly('planner-view');
+  switchTab('stops');
+  setTimeout(() => { if (serverScope) serverScope.pushEnabled = true; }, 3000);
+  return true;
+}
+function clearDriverScope() {
+  serverScope = null; stopPosWatch();
+  const bak = localStorage.getItem(SCOPE_BACKUP);
+  if (bak) { try { Object.assign(state, JSON.parse(bak)); } catch {} localStorage.removeItem(SCOPE_BACKUP); save(); }
+  applyRoleChrome();
+}
+function scheduleTourPush() {
+  if (!serverScope || !serverScope.pushEnabled || !auth.online || (auth.user && auth.user.role !== 'driver')) return;
+  clearTimeout(tourPushTimer);
+  tourPushTimer = setTimeout(pushTour, 1500);
+}
+async function pushTour() {
+  if (!serverScope) return;
+  const stops = state.stops.filter((s) => s.date === serverScope.date && String(s.driverId) === serverScope.driverId)
+    .sort((a, b) => (a.seq || 0) - (b.seq || 0));
+  const r = await api('/tour-save', { method: 'POST', body: { date: serverScope.date, stops } });
+  if (!r.ok && r.data?.error) toast(r.data.error, 'warn', 5000);
+}
+function startPosWatch() {
+  if (posWatchId != null || !('geolocation' in navigator) || !auth.online || (auth.user && auth.user.role !== 'driver')) return;
+  posWatchId = navigator.geolocation.watchPosition((pos) => {
+    const now = Date.now(); const p = { lat: pos.coords.latitude, lng: pos.coords.longitude, speed: pos.coords.speed };
+    const moved = !lastPos || Math.hypot((p.lat - lastPos.lat) * 111, (p.lng - lastPos.lng) * 80) > 0.06;
+    if ((moved || now - lastPosPushAt > 90000) && now - lastPosPushAt > 25000) {
+      lastPosPushAt = now; lastPos = p;
+      api('/position', { method: 'POST', body: { date: currentDate(), lat: p.lat, lng: p.lng, speed: p.speed } }).catch(() => {});
+    }
+  }, () => {}, { enableHighAccuracy: true, maximumAge: 20000, timeout: 15000 });
+}
+function stopPosWatch() { if (posWatchId != null && navigator.geolocation) { navigator.geolocation.clearWatch(posWatchId); posWatchId = null; } }
+function applyRoleChrome() {
+  const isDriver = auth.user && auth.user.role === 'driver';
+  const hiddenForDriver = ['drivers', 'accounts', 'analytics', 'live'];
+  document.querySelectorAll('[data-tab]').forEach((btn) => {
+    const t = btn.getAttribute('data-tab');
+    btn.classList.toggle('hidden', isDriver && hiddenForDriver.includes(t));
+  });
+  if (isDriver && activeTab === 'live') switchTab('stops');
+  const quick = document.getElementById('quick-route-btn');
+  if (quick) quick.classList.toggle('hidden', !isDriver);
+}
+async function renderLive(el) {
+  el.innerHTML = `<div class="p-4"><div class="flex items-center justify-between mb-3 gap-2 flex-wrap"><h2 class="font-bold text-lg">📡 Suivi temps réel — ${formatDateFR(currentDate())}</h2><button type="button" data-action="live-refresh" class="h-10 px-3 rounded-xl bg-slate-100 text-sm font-medium"><i class="fa-solid fa-rotate mr-1"></i> Rafraîchir</button></div><div id="live-cards" class="grid sm:grid-cols-2 gap-3"><div class="text-sm text-slate-500">Chargement…</div></div></div>`;
+  await refreshLiveCards();
+  clearInterval(liveTimer); liveTimer = setInterval(refreshLiveCards, 15000);
+}
+async function refreshLiveCards() {
+  const box = document.getElementById('live-cards'); if (!box) return;
+  const r = await api('/live?date=' + encodeURIComponent(currentDate()));
+  if (!r.ok) { box.innerHTML = `<div class="text-sm text-rose-600">${escapeHtml(r.data && r.data.error || 'Serveur injoignable — ouvrez l’URL officielle HTTPS.')}</div>`; return; }
+  const list = r.data.drivers || [];
+  if (!list.length) { box.innerHTML = '<div class="text-sm text-slate-500">Aucune tournée publiée pour cette date.</div>'; return; }
+  box.innerHTML = list.map((d) => {
+    const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
+    const late = d.lastUpdate && (Date.now() - new Date(d.lastUpdate)) > 15 * 60000;
+    return `<div class="rounded-2xl border border-slate-200 p-3 space-y-2">
+      <div class="flex items-center justify-between"><b class="text-sm">${escapeHtml(d.driverName)}</b><span class="text-xs ${late ? 'text-rose-500' : 'text-emerald-600'}">${late ? '⏰ inactif' : '● actif'} ${d.lastUpdate ? fmtTimeFR(d.lastUpdate) : ''}</span></div>
+      <div class="h-2 rounded-full bg-slate-100 overflow-hidden"><div class="h-full bg-emerald-500" style="width:${pct}%"></div></div>
+      <div class="text-xs text-slate-600">${d.done}/${d.total} effectués${d.currentStop ? ' · en cours : <b>' + escapeHtml(d.currentStop) + '</b>' : ' · ✅ tournée terminée'}</div>
+      ${d.position ? `<div class="text-xs text-slate-500"><i class="fa-solid fa-location-crosshairs mr-1 text-brand-500"></i>${d.position.lat.toFixed(4)}, ${d.position.lng.toFixed(4)} · ${d.position.speed ? Math.round(d.position.speed * 3.6) + ' km/h ·' : ''} ${fmtTimeFR(d.position.at)} <button type="button" data-action="live-locate" data-lat="${d.position.lat}" data-lng="${d.position.lng}" class="text-brand-600 font-medium ml-1">Voir</button></div>` : `<div class="text-xs text-slate-400"><i class="fa-solid fa-satellite-dish mr-1"></i>Position GPS non remontée</div>`}
+    </div>`;
+  }).join('');
 }
 
 function updateHeaderChip() {
@@ -1302,7 +1397,7 @@ function openSelfPwModal() {
 async function publishDay() {
   if (!auth.online) { toast('Ouvrez l’onglet Comptes pour vous connecter au serveur.', 'warn', 6000); switchTab('accounts'); return; }
   const date = currentDate();
-  const tours = state.drivers.map((d) => ({ driverId: d.id, driverName: d.name, stops: getDriverRoute(state, d.id, date) })).filter((t) => t.stops.length);
+  const tours = state.drivers.map((d) => ({ driverId: d.id, driverName: d.name, depot: state.settings.depot, stops: getDriverRoute(state, d.id, date) })).filter((t) => t.stops.length);
   if (!tours.length) { toast('Aucune tournée à publier pour cette date.', 'warn'); return; }
   const r = await api('/publish', { method: 'POST', body: { date, tours } });
   toast(r.ok ? `Journée ${formatDateFR(date)} publiée (${tours.length} tournée(s)) — visible par les conducteurs.` : (r.data?.error || 'Publication impossible.'), r.ok ? 'success' : 'error', 6000);
@@ -1751,6 +1846,16 @@ async function handlePanelClick(ev) {
     case 'publish-day': publishDay(); break;
     case 'fetch-retours': fetchRetours(); break;
     case 'acc-logout': doLogout(); break;
+    case 'live-refresh': refreshLiveCards(); break;
+    case 'live-locate': {
+      const la = Number(ev.target.dataset.lat); const ln = Number(ev.target.dataset.lng);
+      switchTab('routes');
+      setTimeout(() => { try {
+        if (map && window.L) { map.invalidateSize(); map.setView([la, ln], 14); window.L.circleMarker([la, ln], { radius: 9, color: '#dc2626', fillColor: '#ef4444', fillOpacity: 0.8 }).addTo(markersLayer); }
+      } catch {} }, 400);
+      break;
+    }
+    case 'quick-route': location.href = './?mode=conducteur'; break;
     case 'acc-toggle': accAction('PATCH', btn.dataset.id, { active: btn.dataset.active !== '1' }); break;
     case 'acc-del': if (window.confirm('Supprimer définitivement le compte « ' + btn.dataset.name + ' » ?')) accAction('DELETE', btn.dataset.id, {}); break;
     case 'acc-reset': {
@@ -2100,7 +2205,7 @@ function bindPanel() {
   mr.addEventListener('submit', handleSubmit);
 }
 
-function routeFromUrl() {
+async function routeFromUrl() {
   const params = new URLSearchParams(location.search);
   const feedbackId = params.get('feedback');
   const trackId = params.get('track');
@@ -2108,11 +2213,12 @@ function routeFromUrl() {
 
   if (feedbackId) { renderFeedbackView(feedbackId); return; }
   if (trackId) { renderTrackView(trackId); return; }
-  if (auth.user && auth.user.role === 'driver' && (!mode || mode === 'conducteur')) {
+  if (auth.user && auth.user.role === 'driver' && mode === 'conducteur') {
     showOnly('view-driver');
-    driverViewController = initDriverServerView(auth.user, { onExit: () => { driverViewController = null; location.href = './'; } });
+    driverViewController = initDriverServerView(auth.user, { onExit: () => { driverViewController = null; enterDriverPlanner(auth.user); } });
     return;
   }
+  if (auth.user && auth.user.role === 'driver' && !mode) { await enterDriverPlanner(auth.user); return; }
   if (mode === 'conducteur') {
     showOnly('view-driver');
     const id = params.get('d') || state.drivers.find((d) => d.active !== false)?.id || state.drivers[0]?.id;

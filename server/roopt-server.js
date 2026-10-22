@@ -36,6 +36,9 @@ db.exec(`
     PRIMARY KEY(stop_id, date));
   CREATE TABLE IF NOT EXISTS events(
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, user_id INTEGER, ip TEXT, kind TEXT, detail TEXT);
+  CREATE TABLE IF NOT EXISTS positions(
+    driver_id TEXT NOT NULL, date TEXT NOT NULL, lat REAL, lng REAL, speed REAL, at TEXT NOT NULL,
+    PRIMARY KEY(driver_id, date));
 `);
 function log(kind, detail, userId, ip) {
   try { db.prepare('INSERT INTO events(at,user_id,ip,kind,detail) VALUES(?,?,?,?,?)').run(new Date().toISOString(), userId || null, ip || '', kind, String(detail).slice(0, 300)); } catch {}
@@ -222,6 +225,65 @@ async function handleApi(req, res, url, user, ip) {
     return { code: 200, obj: { ok: true } };
   }
 
+
+  if (p === '/api/tour-save' && m === 'POST') {
+    if (!need(user, 'driver')) return { code: 403, obj: { error: 'Reserve conducteur.' } };
+    const ref = user.driver_ref ? String(user.driver_ref) : null;
+    if (!ref) return { code: 400, obj: { error: 'Aucun conducteur relie a ce compte.' } };
+    const b = await readBody(req);
+    const date = String(b.date || new Date().toISOString().slice(0, 10));
+    if (!Array.isArray(b.stops)) return { code: 400, obj: { error: 'payload attendu: {date, stops:[...]}' } };
+    const row = db.prepare('SELECT payload FROM tours WHERE date = ? AND driver_id = ?').get(date, ref);
+    if (!row) return { code: 409, obj: { error: 'Aucune tournee publiee pour ce jour.' } };
+    let prev = {}; try { prev = JSON.parse(row.payload); } catch {}
+    const payload = { driverId: prev.driverId ?? ref, driverName: prev.driverName ?? user.name, stops: b.stops.slice(0, 500), savedBy: user.id, savedAt: new Date().toISOString() };
+    db.prepare('UPDATE tours SET payload = ?, updated = ? WHERE date = ? AND driver_id = ?')
+      .run(JSON.stringify(payload), new Date().toISOString(), date, ref);
+    log('tour_save', date + ' — ' + b.stops.length + ' arrets', user.id, ip);
+    return { code: 200, obj: { ok: true, savedAt: payload.savedAt } };
+  }
+
+  if (p === '/api/position' && m === 'POST') {
+    if (!need(user, 'driver')) return { code: 403, obj: { error: 'Reserve conducteur.' } };
+    const ref = user.driver_ref ? String(user.driver_ref) : null;
+    if (!ref) return { code: 200, obj: { ok: true, ignored: true } };
+    const b = await readBody(req);
+    const lat = Number(b.lat), lng = Number(b.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return { code: 400, obj: { error: 'lat/lng requis' } };
+    const date = String(b.date || new Date().toISOString().slice(0, 10));
+    db.prepare('INSERT INTO positions(driver_id,date,lat,lng,speed,at) VALUES(?,?,?,?,?,?) ON CONFLICT(driver_id,date) DO UPDATE SET lat=excluded.lat, lng=excluded.lng, speed=excluded.speed, at=excluded.at')
+      .run(ref, date, lat, lng, Number(b.speed) || null, new Date().toISOString());
+    return { code: 200, obj: { ok: true } };
+  }
+
+  if (p === '/api/live' && m === 'GET') {
+    if (!need(user, 'admin')) return { code: 403, obj: { error: 'Reserve admin.' } };
+    const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+    const rows = db.prepare('SELECT driver_id, payload, updated FROM tours WHERE date = ?').all(date);
+    const upd = db.prepare('SELECT stop_id, status, at FROM updates WHERE date = ?').all(date);
+    const byStop = new Map(upd.map((u) => [String(u.stop_id), u]));
+    const pos = db.prepare('SELECT * FROM positions WHERE date = ?').all(date);
+    const posBy = new Map(pos.map((x) => [String(x.driver_id), x]));
+    const out = rows.map((r) => {
+      let t = {}; try { t = JSON.parse(r.payload); } catch {}
+      const stops = (t.stops || []).map((st, i) => {
+        const u = byStop.get(String(st.id));
+        return { id: st.id, name: st.name, seq: st.seq ?? i + 1, status: (u && u.status) || st.status || 'pending', at: u && u.at };
+      });
+      const done = stops.filter((st) => ['delivered', 'absent', 'failed'].includes(st.status)).length;
+      const cur = stops.find((st) => !['delivered', 'absent', 'failed'].includes(st.status));
+      const lastAt = stops.reduce((mx, st) => (st.at && (!mx || st.at > mx) ? st.at : mx), null);
+      const dd = String(r.driver_id); const ddNum = Number(dd);
+      const pp = posBy.get(dd) || posBy.get(ddNum) || null;
+      return {
+        driverId: dd, driverName: t.driverName || ('Conducteur ' + dd),
+        total: stops.length, done, currentStop: cur ? cur.name : null,
+        stops: stops.slice(0, 80), lastUpdate: lastAt || r.updated,
+        position: pp ? { lat: pp.lat, lng: pp.lng, speed: pp.speed, at: pp.at } : null,
+      };
+    });
+    return { code: 200, obj: { date, drivers: out } };
+  }
 
   if (p === '/api/audit' && m === 'GET') {
     if (!need(user, 'admin')) return { code: 403, obj: { error: 'Reserve admin.' } };
