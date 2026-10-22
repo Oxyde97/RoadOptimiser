@@ -48,6 +48,8 @@ const panel = () => document.getElementById('panel');
 const modalRoot = () => document.getElementById('modal-root');
 
 function save() {
+  try { localStorage.setItem('roadoptimizur.ws.stamp', new Date().toISOString()); } catch {}
+  scheduleWsPush();
   const ok = saveState(state);
   const badge = document.getElementById('save-state');
   if (badge) {
@@ -1162,12 +1164,13 @@ function podRowHTML(field) {
 
 /* ============ v4 : COMPTES & BACK-OFFICE ============ */
 
-function doLogout() {
+async function doLogout() {
+  if (auth.user && auth.user.role === 'admin' && auth.online) { clearTimeout(wsPushTimer); await pushWorkspace(); }
   logout();
   clearDriverScope();
   updateHeaderChip();
   toast('Déconnecté du serveur.', 'info');
-  showGateAgain(() => { updateHeaderChip(); routeFromUrl(); });
+  showGateAgain(async () => { updateHeaderChip(); if (auth.user && auth.user.role === 'admin') await pullAdminWorkspace(); routeFromUrl(); });
 }
 
 
@@ -1245,6 +1248,39 @@ function clearDriverScope() {
 function ensureScopeConsistency() {
   if (auth.user && auth.user.role === 'admin' && localStorage.getItem(SCOPE_ACTIVE)) clearDriverScope();
 }
+let wsPushTimer = null; let wsBootDone = false;
+function scheduleWsPush() {
+  if (!auth.online || !auth.user || auth.user.role !== 'admin' || serverScope) return;
+  clearTimeout(wsPushTimer); wsPushTimer = setTimeout(pushWorkspace, 2500);
+}
+async function pushWorkspace() {
+  if (!auth.online || !auth.user || auth.user.role !== 'admin' || serverScope) return false;
+  try { const r = await api('/ws', { method: 'POST', body: state }); return Boolean(r.ok); } catch { return false; }
+}
+async function pullAdminWorkspace() {
+  if (!auth.online || !auth.user || auth.user.role !== 'admin') { wsBootDone = true; return; }
+  try {
+    const r = await api('/ws');
+    if (!r.ok) throw new Error('http');
+    const remote = r.data && r.data.data;
+    if (!remote) {
+      wsBootDone = true;
+      if ((state.stops || []).length || (state.planning && state.planning.dates || []).length > 1) await pushWorkspace();
+      return;
+    }
+    const localStamp = localStorage.getItem('roadoptimizur.ws.stamp') || '';
+    const remoteStamp = r.data.updated || '';
+    if (!localStamp || remoteStamp >= localStamp) {
+      Object.assign(state, remote);
+      save(); renderAll();
+      toast('Espace de travail charge depuis le serveur.', 'ok', 2500);
+    } else {
+      await pushWorkspace();
+    }
+    wsBootDone = true;
+  } catch { wsBootDone = true; toast('Serveur injoignable — donnees locales affichees.', 'warn', 5000); }
+}
+
 function scheduleTourPush() {
   if (!serverScope || !serverScope.pushEnabled || !auth.online || (auth.user && auth.user.role !== 'driver')) return;
   lastEditAt = Date.now();
@@ -2301,6 +2337,7 @@ async function init() {
   ensureScopeConsistency();
   updateHeaderChip();
   if (!isPublicLink && gate.user && gate.user.role === 'admin') {
+    await pullAdminWorkspace();
     routeFromUrl();
     switchTab('accounts');
     return;

@@ -36,6 +36,7 @@ db.exec(`
     PRIMARY KEY(stop_id, date));
   CREATE TABLE IF NOT EXISTS events(
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, user_id INTEGER, ip TEXT, kind TEXT, detail TEXT);
+  CREATE TABLE IF NOT EXISTS ws_snapshots(key TEXT PRIMARY KEY, data TEXT, updated TEXT);
   CREATE TABLE IF NOT EXISTS positions(
     driver_id TEXT NOT NULL, date TEXT NOT NULL, lat REAL, lng REAL, speed REAL, at TEXT NOT NULL,
     PRIMARY KEY(driver_id, date));
@@ -247,6 +248,24 @@ async function handleApi(req, res, url, user, ip) {
     const p = JSON.parse(r.payload);
     return { code: 200, obj: { date: r.date, savedAt: p.savedAt || null, tour: p } };
   }
+  if (p === '/api/ws' && m === 'GET') {
+    if (!user) return { code: 401, obj: { error: 'Non connecte.' } };
+    if (user.role !== 'admin') return { code: 403, obj: { error: 'Reserve admin.' } };
+    const r = db.prepare('SELECT data, updated FROM ws_snapshots WHERE key = ?').get('admin');
+    return { code: 200, obj: r ? { updated: r.updated, data: JSON.parse(r.data) } : { updated: null, data: null } };
+  }
+  if (p === '/api/ws' && m === 'POST') {
+    if (!user) return { code: 401, obj: { error: 'Non connecte.' } };
+    if (user.role !== 'admin') return { code: 403, obj: { error: 'Reserve admin.' } };
+    const b = await readBody(req);
+    const s2 = JSON.stringify(b);
+    if (s2.length > 1500000) return { code: 413, obj: { error: 'Espace de travail trop volumineux (max 1.5 Mo).' } };
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO ws_snapshots(key, data, updated) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated = excluded.updated').run('admin', s2, now);
+    log('ws_save', null, user.id, ip);
+    return { code: 200, obj: { ok: true, updated: now } };
+  }
+
   if (p === '/api/tour-save' && m === 'POST') {
     if (!need(user, 'driver')) return { code: 403, obj: { error: 'Reserve conducteur.' } };
     const ref = user.driver_ref ? String(user.driver_ref) : null;
