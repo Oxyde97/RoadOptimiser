@@ -67,6 +67,7 @@ function setDate(date) {
   state.planning.activeDate = date;
   save();
   renderAll();
+  if (serverScope && !serverScope.dates[date]) driverPullWeek({ silent: true });
 }
 
 function driverOf(stop) {
@@ -1173,11 +1174,10 @@ function doLogout() {
 /* ===== V5 — conducteur connecté & suivi temps réel ===== */
 const SCOPE_BACKUP = 'roadoptimizur.v3.scopebak';
 const SCOPE_ACTIVE = 'roadoptimizur.v3.scopeactive';
-let serverScope = null; let tourPushTimer = null; let liveTimer = null; let posWatchId = null; let lastPos = null; let lastPosPushAt = 0;
+let serverScope = null; let tourPushTimer = null; let liveTimer = null; let posWatchId = null; let lastPos = null; let lastPosPushAt = 0; let driverSyncTimer = null; let lastEditAt = 0;
 function fmtTimeFR(iso) { try { return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } }
 async function enterDriverPlanner(user) {
   if (!auth.online) return false;
-  const date = currentDate();
   const ref = String(user.driverRef ?? user.driver_ref ?? user.id);
   const active = localStorage.getItem(SCOPE_ACTIVE);
   if (active !== ref) {
@@ -1186,25 +1186,56 @@ async function enterDriverPlanner(user) {
     localStorage.setItem(SCOPE_BACKUP, JSON.stringify(state));
     localStorage.setItem(SCOPE_ACTIVE, ref);
   }
-  const r = await api('/my-tour?date=' + encodeURIComponent(date));
-  serverScope = { date, driverId: ref };
-  if (r.ok && r.data.tour && Array.isArray(r.data.tour.stops)) {
-    const t = r.data.tour;
-    if (t.depot) state.settings.depot = t.depot;
-    state.drivers = [{ id: ref, name: t.driverName || user.name, color: '#0ea5e9', phone: user.phone || '' }];
-    state.stops = t.stops.map((st) => ({ ...st, date, driverId: ref, id: st.id || uid() }));
-    save();
-  }
+  serverScope = { driverId: ref, dates: {}, pushEnabled: false };
+  state.drivers = [{ id: ref, name: user.name, color: '#0ea5e9', phone: user.phone || '' }];
   applyRoleChrome();
   startPosWatch();
-  serverScope.pushEnabled = false;
   showOnly('planner-view');
+  const okWeek = await driverPullWeek();
+  if (!okWeek) toast('Connexion au serveur impossible — dernière version locale affichée.', 'warn', 6000);
   switchTab('stops');
   setTimeout(() => { if (serverScope) serverScope.pushEnabled = true; }, 3000);
+  if (!driverSyncTimer) driverSyncTimer = setInterval(() => { if (serverScope && !document.hidden) driverPullWeek({ silent: true }); }, 60000);
+  document.addEventListener('visibilitychange', onDriverVisible);
   return true;
+}
+function onDriverVisible() { if (!document.hidden && serverScope && auth.online) driverPullWeek({ silent: true }); }
+function applyOneTour(tour, date) {
+  if (tour.depot) state.settings.depot = tour.depot;
+  const keep = state.stops.filter((s) => s.date !== date || String(s.driverId) !== serverScope.driverId);
+  const mapped = (tour.stops || []).map((st) => ({ ...st, date, driverId: serverScope.driverId, id: st.id || uid() }));
+  state.stops = keep.concat(mapped);
+  serverScope.dates[date] = { savedAt: tour.savedAt || null, updatedAt: tour.updated || null, count: mapped.length };
+  return mapped.length;
+}
+async function driverPullWeek(opts = {}) {
+  if (!serverScope || !auth.online) return false;
+  try {
+    const from = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const r = await api('/my-week?from=' + from);
+    if (!r.ok) return false;
+    const tours = (r.data.tours || []).sort((a, b) => a.date.localeCompare(b.date));
+    let touched = 0;
+    for (const t of tours) {
+      const prev = serverScope.dates[t.date];
+      const stamp = String(t.savedAt || '') + '|' + String(t.updated || '');
+      const prevStamp = prev ? String(prev.savedAt || '') + '|' + String(prev.updated || '') : null;
+      if (prevStamp === stamp) continue;
+      if (Date.now() - lastEditAt < 8000) continue;
+      if (applyOneTour(t.tour, t.date)) touched++;
+    }
+    const cur = currentDate();
+    const hasToday = state.stops.some((s) => s.date === cur && String(s.driverId) === serverScope.driverId);
+    if (!hasToday && tours.length && tours[0].date !== cur) { ensureDate(state, tours[0].date); state.planning.activeDate = tours[0].date; touched++; }
+    if (touched) { save(); renderAll(); if (!opts.silent && touched) toast('Tournées synchronisées.', 'ok', 2500); }
+    if (!tours.length && !opts.silent) toast('Aucune tournée publiée pour ce compte. Préviens le dispatch.', 'warn', 6000);
+    return true;
+  } catch { return false; }
 }
 function clearDriverScope() {
   serverScope = null; stopPosWatch();
+  if (driverSyncTimer) { clearInterval(driverSyncTimer); driverSyncTimer = null; }
+  document.removeEventListener('visibilitychange', onDriverVisible);
   const bak = localStorage.getItem(SCOPE_BACKUP);
   if (bak) { try { Object.assign(state, JSON.parse(bak)); } catch {} }
   localStorage.removeItem(SCOPE_BACKUP); localStorage.removeItem(SCOPE_ACTIVE);
@@ -1216,14 +1247,18 @@ function ensureScopeConsistency() {
 }
 function scheduleTourPush() {
   if (!serverScope || !serverScope.pushEnabled || !auth.online || (auth.user && auth.user.role !== 'driver')) return;
+  lastEditAt = Date.now();
   clearTimeout(tourPushTimer);
   tourPushTimer = setTimeout(pushTour, 1500);
 }
 async function pushTour() {
   if (!serverScope) return;
-  const stops = state.stops.filter((s) => s.date === serverScope.date && String(s.driverId) === serverScope.driverId)
+  const date = currentDate();
+  if (!serverScope.dates[date]) return;
+  const stops = state.stops.filter((s) => s.date === date && String(s.driverId) === serverScope.driverId)
     .sort((a, b) => (a.seq || 0) - (b.seq || 0));
-  const r = await api('/tour-save', { method: 'POST', body: { date: serverScope.date, stops } });
+  const r = await api('/tour-save', { method: 'POST', body: { date, stops } });
+  if (r.ok && r.data && r.data.savedAt && serverScope.dates[date]) serverScope.dates[date].savedAt = r.data.savedAt;
   if (!r.ok && r.data?.error) toast(r.data.error, 'warn', 5000);
 }
 function startPosWatch() {
