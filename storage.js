@@ -139,7 +139,7 @@ export function isValidFrenchCP(cp) {
 export function parseParcelBarcode(raw) {
   const text = String(raw || '').trim();
   if (!text) return null;
-  const compact = text.replace(/[\s.\-\/]+/g, '').toUpperCase();
+  const compact = text.replace(/[^A-Za-z0-9]+/g, '').toUpperCase();
   const cands = [];
   const fr = compact.match(/FR(\d{5})/);
   if (fr) cands.push(fr[1]);
@@ -509,7 +509,7 @@ export function parseLabelPayload(raw) {
     if (!head) continue;
     if (head === '01') {
       const g = fields.slice(1).filter(Boolean);
-      const m = seg.match(/XU\d{10,}/);
+      const m = seg.match(/X[A-Z]\d{9,}/);
       if (m) out.tracking = m[0];
       const zm = g.find((f) => /^00\d{5}$/.test(f));
       if (zm) out.recipient.zip = zm.slice(2, 7);
@@ -519,8 +519,8 @@ export function parseLabelPayload(raw) {
         out.recipient.city = words[1];
         out.recipient.company = words[words.length - 1];
       }
-      const kg = seg.match(/(\d{1,3})KG/);
-      if (kg) out.weightKg = Number(kg[1]);
+      const kg = seg.match(/(\d+(?:[.,]\d+)?)KG/);
+      if (kg) out.weightKg = Number(kg[1].replace(',', '.'));
     } else if (head === '07' && fields[1] === 'G03') {
       const a = usBlock(seg);
       if (a[0]) out.recipient.company = a[0];
@@ -531,6 +531,11 @@ export function parseLabelPayload(raw) {
       if (em) out.recipient.email = em;
       const extra = a.slice(8).find(Boolean);
       if (extra) out.recipient.address2 = extra;
+      // variantes d'étiquettes : nom parfois en a[2] seulement (a[0]/a[1] vides)
+      if (!a[0] && !a[1] && !out.recipient.name) {
+        const first = a.find((x) => x && x !== out.recipient.phone && !x.includes('@'));
+        if (first) out.recipient.name = first;
+      }
       const ref = seg.match(/[A-Z]{2}\d{4}-\d{4}/);
       if (ref) out.orderRef = ref[0];
     } else if (head === '07' && fields[1] === 'S010') {
