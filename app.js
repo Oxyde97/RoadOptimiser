@@ -1300,8 +1300,14 @@ async function driverPullWeek(opts = {}) {
       if (applyOneTour(t.tour, t.date)) touched++;
     }
     const cur = currentDate();
+    const serverToday = r.data.serverDate || cur;
     const hasToday = state.stops.some((s) => s.date === cur && String(s.driverId) === serverScope.driverId);
-    if (!hasToday && tours.length && tours[0].date !== cur) { ensureDate(state, tours[0].date); state.planning.activeDate = tours[0].date; touched++; }
+    const withStops = tours.filter((t) => ((t.tour && t.tour.stops) || []).length > 0);
+    if (!hasToday && withStops.length) {
+      // prochain jour publié (>= date serveur), sinon la tournée la plus récente avec arrêts
+      const target = (withStops.find((t) => t.date >= serverToday) || withStops[withStops.length - 1]).date;
+      if (target !== cur) { ensureDate(state, target); state.planning.activeDate = target; touched++; }
+    }
     if (touched) { save(); renderAll(); if (!opts.silent && touched) toast('Tournées synchronisées.', 'ok', 2500); }
     if (!tours.length && !opts.silent) toast('Aucune tournée publiée pour ce compte. Préviens le dispatch.', 'warn', 6000);
     return true;

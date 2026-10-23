@@ -233,9 +233,11 @@ async function handleApi(req, res, url, user, ip) {
     if (user.role !== 'driver') return { code: 403, obj: { error: 'Réservé aux conducteurs.' } };
     const ref = String(user.driver_ref ? user.driver_ref : '');
     if (!ref) return { code: 200, obj: { reason: 'no_driver_link', tours: [] } };
-    const from = String(url.searchParams.get('from') || new Date().toISOString().slice(0, 10));
+    let from = String(url.searchParams.get('from') || new Date().toISOString().slice(0, 10));
+    const floor = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
+    if (from > floor) from = floor; // fenêtre d'au moins 14 jours: une tournée passée du chauffeur doit toujours revenir
     const rows = db.prepare('SELECT date, payload, updated FROM tours WHERE driver_id = ? AND date >= ? ORDER BY date ASC LIMIT 15').all(ref, from);
-    return { code: 200, obj: { tours: rows.map((r) => { const p = JSON.parse(r.payload); return { date: r.date, updated: r.updated, savedAt: p.savedAt || null, tour: p }; }) } };
+    return { code: 200, obj: { serverDate: new Date().toISOString().slice(0, 10), tours: rows.map((r) => { const p = JSON.parse(r.payload); return { date: r.date, updated: r.updated, savedAt: p.savedAt || null, tour: p }; }) } };
   }
   if (p === '/api/next-tour' && m === 'GET') { // plus proche tournée publiée >= date
     const user = currentUser(req);
