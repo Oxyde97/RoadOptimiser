@@ -553,7 +553,24 @@ export function parseLabelPayload(raw) {
       out.bestBefore = g[0] || null;
     }
   }
-  if (!out.recipient.name && !out.recipient.street) return null;
+  if (!out.recipient.name && !out.recipient.street) {
+    /* Repli : certains décodeurs renvoient le GEPIR SANS séparateurs (compact).
+     * On ne peut plus extraire l'adresse structurée, mais le suivi et le CP
+     * restent récupérables par regex sur la chaîne dénuée de séparateurs. */
+    const compact = text.replace(/[\x1d\x1e\x1f\u241d\u241e\u241f\u2420 ]/g, '');
+    if (compact.includes('[)>')) {
+      if (!out.tracking) {
+        const m = compact.match(/X[A-Z]\d{9,}/);
+        if (m) out.tracking = m[0];
+      }
+      if (!out.recipient.zip) {
+        for (const z of compact.matchAll(/00(\d{5})/g)) {
+          if (isValidFrenchCP(z[1])) { out.recipient.zip = z[1]; break; }
+        }
+      }
+    }
+    if (!out.recipient.name && !out.recipient.street && !out.tracking) return null;
+  }
   const r = out.recipient;
   const zipCity = r.zip && r.city ? `${r.zip} ${r.city}` : (r.city || '');
   out.fullAddress = [r.street, zipCity].filter(Boolean).join(', ');

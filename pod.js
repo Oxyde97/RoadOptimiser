@@ -412,9 +412,325 @@ export function openPOD(stop, state, opts = {}) {
   return { close };
 }
 
+/** Classification d'un code scanné : 'label' (GEPIR étiquette), 'tracking'
+ *  (n° de suivi brut), 'other'. Exportée pour les tests (harness-v59). */
+export function classifyScanCode(value) {
+  const v = String(value || '');
+  if (v.includes('[)>') && (/[\x1d\x1e\u241d\u241e]/.test(v) || /(GEOP|S010|G03)/.test(v))) return 'label';
+  if (/^[0-9A-Z]{8,}$/.test(v.replace(/[\s.\-\/%]/g, ''))) return 'tracking';
+  return 'other';
+}
+
 /* ------------------------------------------------------------------ */
 /* Scanner code-barres                                                 */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* Décodage « difficile » : tuiles 1:1 → agrandissement cubique Keys   */
+/* → zxing-wasm, avec variante seuillage adaptatif (3× box blur).      */
+/* Les étiquettes Chronofresh récentes ont un Aztec petit au centre    */
+/* que AUCUN pipeline canvas (resize drawImage) ne rend décodable :    */
+/* il faut recadrer sans rééchantillonnage puis upscaler soi-même      */
+/* (noyau cubique Keys a=-0.75, comme cv2.INTER_CUBIC — vérifié en     */
+/* navigateur réel sur étiquettes 2026 ; le flou du filtre canvas      */
+/* « high quality » empêche zxing de verrouiller l'Aztec).             */
+/* ------------------------------------------------------------------ */
+
+/* Tuiles dans l'ordre de probabilité de l'Aztec (centre-droite d'abord),
+ * pleine image en dernier (repli Code128/suivi). */
+const HARD_TILES = [
+  [0.45, 0.4, 0.9, 0.8],
+  [0.4, 0.35, 1.0, 0.85],
+  [0.1, 0.1, 0.9, 0.9],
+  [0.0, 0.3, 0.6, 0.8],
+  [0.4, 0.55, 0.95, 1.0],
+  [0, 0, 1, 1],
+];
+
+/* zxing-wasm (zxing-cpp compilé WASM, v3.1.6 MIT) : SEUL moteur capable de
+ * lire l'Aztec petit des étiquettes Chronofresh récentes. Le vieux zxing-js
+ * (zxing.umd.js, API 0.x) échoue sur ces photos — vérifié en navigateur.
+ * Chargé paresseusement à la première passe difficile. */
+const ZXWASM_FORMATS = ['Aztec', 'QRCode', 'DataMatrix', 'Code128', 'Code39', 'Code93', 'EAN13', 'EAN8', 'PDF417', 'ITF'];
+let zxWasmPromise = null;
+function loadZxingWasm() {
+  if (!zxWasmPromise) {
+    zxWasmPromise = new Promise((resolve) => {
+      if (window.ZXingWASM?.readBarcodesFromImageData) { resolve(window.ZXingWASM); return; }
+      const tag = document.createElement('script');
+      tag.src = 'zxing-wasm.iife.js';
+      tag.onload = () => resolve(window.ZXingWASM || null);
+      tag.onerror = () => resolve(null);
+      (document.head || document.body).appendChild(tag);
+    });
+  }
+  return zxWasmPromise;
+}
+
+let zxWasmReady = null;
+function wasmDecodeImageData(imageData) {
+  if (!zxWasmReady) {
+    zxWasmReady = loadZxingWasm().then((ZW) => {
+      if (!ZW?.readBarcodesFromImageData) return null;
+      try { ZW.setZXingModuleOverrides({ locateFile: (name) => name }); } catch {}
+      return ZW;
+    }).catch(() => null);
+  }
+  return zxWasmReady.then((ZW) => {
+    if (!ZW) return null;
+    return ZW.readBarcodesFromImageData(imageData, { tryHarder: true, formats: ZXWASM_FORMATS })
+      .then((codes) => (codes && codes.length ? codes.map((c) => String(c.text)) : null))
+      .catch(() => null);
+  });
+}
+
+/* ---------- pipeline pixel (remplace tout resize canvas) ---------- */
+
+let hardCanvas = null;
+function hardCtx(w, h) {
+  if (!hardCanvas) {
+    hardCanvas = document.createElement('canvas');
+    hardCanvas.width = w; hardCanvas.height = h;
+  } else if (hardCanvas.width !== w || hardCanvas.height !== h) {
+    hardCanvas.width = w; hardCanvas.height = h;
+  }
+  const ctx = hardCanvas.getContext('2d', { willReadFrequently: true });
+  if (ctx) { ctx.imageSmoothingEnabled = false; ctx.clearRect(0, 0, w, h); }
+  return ctx;
+}
+
+/** Copie 1:1 (aucun rééchantillonnage) d'une tuile de `source` en ImageData. */
+function cropImageData1to1(source, sw, sh, tile) {
+  const [a, b, c, d] = tile;
+  const sx = Math.round(sw * a), sy = Math.round(sh * b);
+  const w = Math.round(sw * (c - a)), h = Math.round(sh * (d - b));
+  if (w < 16 || h < 16) return null;
+  try {
+    const ctx = hardCtx(w, h);
+    if (!ctx) return null;
+    ctx.drawImage(source, sx, sy, w, h, 0, 0, w, h);
+    return ctx.getImageData(0, 0, w, h);
+  } catch { return null; }
+}
+
+function keysCubic(x) {
+  x = Math.abs(x);
+  if (x <= 1) return (1.25 * x - 2.25) * x * x + 1;      // a=-0.75 branche centrale
+  if (x < 2) return ((-0.75 * x + 3.75) * x - 6) * x + 3; // a=-0.75 branche externe
+  return 0;
+}
+function reflectIdx(i, n) { if (i < 0) i = -i - 1; if (i >= n) i = 2 * n - i - 1; return i; }
+function axisCoeffs(n, outn) {
+  const idx = new Int32Array(outn * 4), ws = new Float32Array(outn * 4);
+  for (let o = 0; o < outn; o++) {
+    const cc = (o + 0.5) * n / outn - 0.5, i0 = Math.floor(cc);
+    let sum = 0;
+    for (let k = 0; k < 4; k++) {
+      const ii = i0 + k - 1;
+      idx[o * 4 + k] = reflectIdx(ii, n);
+      ws[o * 4 + k] = keysCubic(cc - ii);
+      sum += ws[o * 4 + k];
+    }
+    for (let k = 0; k < 4; k++) ws[o * 4 + k] /= sum;
+  }
+  return { idx, ws };
+}
+
+/** Agrandissement cubique Keys (identique cv2.INTER_CUBIC) — LA clé qui fait
+ *  basculer le décodage Aztec là où le resize canvas échoue. */
+function keysCubicResize(im, scale) {
+  const { width: w, height: h, data: src } = im;
+  const W = w * scale, H = h * scale;
+  if (W > 2600 || H > 2600) return null;
+  const cx = axisCoeffs(w, W), cy = axisCoeffs(h, H);
+  const tmp = new Float32Array(W * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let X = 0; X < W; X++) {
+      const b0 = (y * w + cx.idx[X * 4]) * 4, b1 = (y * w + cx.idx[X * 4 + 1]) * 4;
+      const b2 = (y * w + cx.idx[X * 4 + 2]) * 4, b3 = (y * w + cx.idx[X * 4 + 3]) * 4;
+      const c0 = cx.ws[X * 4], c1 = cx.ws[X * 4 + 1], c2 = cx.ws[X * 4 + 2], c3 = cx.ws[X * 4 + 3];
+      const o = (y * W + X) * 3;
+      tmp[o] = src[b0] * c0 + src[b1] * c1 + src[b2] * c2 + src[b3] * c3;
+      tmp[o + 1] = src[b0 + 1] * c0 + src[b1 + 1] * c1 + src[b2 + 1] * c2 + src[b3 + 1] * c3;
+      tmp[o + 2] = src[b0 + 2] * c0 + src[b1 + 2] * c1 + src[b2 + 2] * c2 + src[b3 + 2] * c3;
+    }
+  }
+  const dst = new Uint8ClampedArray(W * H * 4);
+  for (let Y = 0; Y < H; Y++) {
+    const r0 = cy.idx[Y * 4] * W * 3, r1 = cy.idx[Y * 4 + 1] * W * 3;
+    const r2 = cy.idx[Y * 4 + 2] * W * 3, r3 = cy.idx[Y * 4 + 3] * W * 3;
+    const w0 = cy.ws[Y * 4], w1 = cy.ws[Y * 4 + 1], w2 = cy.ws[Y * 4 + 2], w3 = cy.ws[Y * 4 + 3];
+    const base = Y * W * 4;
+    for (let x = 0; x < W * 3; x++) {
+      dst[base + ((x / 3) | 0) * 4 + (x % 3)] =
+        tmp[r0 + x] * w0 + tmp[r1 + x] * w1 + tmp[r2 + x] * w2 + tmp[r3 + x] * w3;
+    }
+    for (let X = 0; X < W; X++) dst[base + X * 4 + 3] = 255;
+  }
+  const res = new ImageData(W, H);
+  res.data.set(dst);
+  return res;
+}
+
+/** Seuil adaptatif fidèle à OpenCV ADAPTIVE_THRESH_GAUSSIAN_C block=31 C=5 :
+ *  noyau gaussien séparable 31 taps (sigma=5), bord REFLECT_101, seuillage
+ *  local b > flou(b) - 5. Approx box 3× échouait (bruit JPEG, vérifié). */
+function adaptiveBinImageData(im) {
+  const { width: w, height: h, data: src } = im;
+  const n = w * h;
+  const g = new Float32Array(n);
+  for (let p = 0, i = 0; p < n; p++, i += 4) g[p] = src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114;
+  const K = 31, R = 15, sigma = 0.3 * ((K - 1) * 0.5 - 1) + 0.8;
+  const kern = new Float32Array(K);
+  let ksum = 0;
+  for (let i = 0; i < K; i++) {
+    const x = i - R;
+    kern[i] = Math.exp(-(x * x) / (2 * sigma * sigma));
+    ksum += kern[i];
+  }
+  for (let i = 0; i < K; i++) kern[i] /= ksum;
+  const tmp = new Float32Array(n);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      let acc = 0;
+      for (let k = -R; k <= R; k++) {
+        let xx = x + k;
+        if (xx < 0) xx = -xx - 1; else if (xx >= w) xx = 2 * w - xx - 1;
+        acc += kern[k + R] * g[row + xx];
+      }
+      tmp[row + x] = acc;
+    }
+  }
+  const blur = new Float32Array(n);
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) {
+      let acc = 0;
+      for (let k = -R; k <= R; k++) {
+        let yy = y + k;
+        if (yy < 0) yy = -yy - 1; else if (yy >= h) yy = 2 * h - yy - 1;
+        acc += kern[k + R] * tmp[yy * w + x];
+      }
+      blur[y * w + x] = acc;
+    }
+  }
+  const out = new ImageData(w, h);
+  const o = out.data;
+  for (let p = 0, i = 0; p < n; p++, i += 4) {
+    const v = g[p] > blur[p] - 5 ? 255 : 0;
+    o[i] = o[i + 1] = o[i + 2] = v; o[i + 3] = 255;
+  }
+  return out;
+}
+
+/** Décodeur legacy zxing-js sur canvas (repli si WASM indisponible). */
+function drawLegacyVariant(source, sw, sh, tile, scale) {
+  const [a, b, c, d] = tile;
+  const sx = Math.round(sw * a), sy = Math.round(sh * b);
+  const w = Math.round(sw * (c - a)), h = Math.round(sh * (d - b));
+  if (w < 16 || h < 16) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.min(2600, Math.round(w * scale));
+  canvas.height = Math.min(2600, Math.round(h * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, sx, sy, w, h, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+/** Renvoie (canvas) => Promise<{text}|null> compatible multi-versions du
+ *  bundle zxing-js vendored (API 0.x : pas de decodeFromCanvas !). */
+function makeCanvasDecoder() {
+  const Z = window.ZXing;
+  if (!Z) return null;
+  let reader = null, hints = null;
+  try {
+    hints = new Map([
+      [Z.DecodeHintType.POSSIBLE_FORMATS, [
+        Z.BarcodeFormat.AZTEC, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX,
+        Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93,
+        Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.PDF_417, Z.BarcodeFormat.ITF,
+      ]],
+      [Z.DecodeHintType.TRY_HARDER, true],
+    ]);
+    reader = new Z.BrowserMultiFormatReader(hints);
+  } catch { return null; }
+  if (!reader) return null;
+  if (typeof reader.decodeFromCanvas === 'function') {
+    return async (canvas) => {
+      const r = await reader.decodeFromCanvas(canvas);
+      return r?.text ? { text: String(r.text) } : null;
+    };
+  }
+  if (Z.HTMLCanvasElementLuminanceSource && Z.MultiFormatReader && Z.BinaryBitmap && Z.HybridBinarizer) {
+    return async (canvas) => {
+      try {
+        const src = new Z.HTMLCanvasElementLuminanceSource(canvas);
+        const bb = new Z.BinaryBitmap(new Z.HybridBinarizer(src));
+        const r = new Z.MultiFormatReader().decode(bb, hints);
+        return r?.text ? { text: String(r.text) } : null;
+      } catch { return null; }
+    };
+  }
+  return async (canvas) => {
+    try {
+      const r = await reader.decodeFromImageUrl(canvas.toDataURL('image/png'));
+      return r?.text ? { text: String(r.text) } : null;
+    } catch { return null; }
+  };
+}
+
+/** Passe difficile : pleine-image 1:1 puis tuiles × {×2, ×3} × {brut,
+ *  seuillage adaptatif} via zxing-wasm ; repli legacy zxing-js si absent.
+ *  Renvoie { text, label:true } dès qu'un GEPIR est validé par `isLabel`,
+ *  sinon { text, label:false } (repli suivi) ou null. Exporté pour tests. */
+export async function hardDecodeSource(source, { isLabel, budgetMs = 6500 } = {}) {
+  const sw = source.videoWidth || source.naturalWidth || source.width;
+  const sh = source.videoHeight || source.naturalHeight || source.height;
+  if (!sw || !sh) return null;
+  loadZxingWasm();
+  const legacyDecode = makeCanvasDecoder();
+  const deadline = Date.now() + budgetMs;
+  let tracking = null;
+  const eat = (texts) => {
+    for (const raw of texts || []) {
+      const text = String(raw).trim();
+      if (!text) continue;
+      if (isLabel?.(text)) return text;
+      if (!tracking && /^%?[0-9A-Za-z][0-9A-Za-z.\-/% ]{5,}$/.test(text)) tracking = text;
+    }
+    return null;
+  };
+  // 1) pleine image 1:1 (gros codes, et suivi Code128)
+  const full = cropImageData1to1(source, sw, sh, [0, 0, 1, 1]);
+  if (full) {
+    const hit = eat(await wasmDecodeImageData(full).catch(() => null));
+    if (hit) return { text: hit, label: true };
+    if (legacyDecode) {
+      const canvas = drawLegacyVariant(source, sw, sh, [0, 0, 1, 1], 1);
+      const res = canvas && await legacyDecode(canvas).catch(() => null);
+      const hit2 = res ? eat([res.text]) : null;
+      if (hit2) return { text: hit2, label: true };
+    }
+  }
+  // 2) tuiles × échelles × variantes (WASM uniquement — le legacy ne sait pas)
+  for (const tile of HARD_TILES) {
+    for (const scale of [2, 3]) {
+      const crop = cropImageData1to1(source, sw, sh, tile);
+      const big = crop && keysCubicResize(crop, scale);
+      if (!big) continue;
+      let hit = eat(await wasmDecodeImageData(big).catch(() => null));
+      if (hit) return { text: hit, label: true };
+      hit = eat(await wasmDecodeImageData(adaptiveBinImageData(big)).catch(() => null));
+      if (hit) return { text: hit, label: true };
+      if (Date.now() > deadline) break;
+    }
+    if (Date.now() > deadline) break;
+  }
+  return tracking ? { text: tracking, label: false } : null;
+}
 
 export function openScanner(stop, opts = {}) {
   const expected = [
@@ -473,12 +789,7 @@ export function openScanner(stop, opts = {}) {
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
   };
 
-  const classify = (value) => {
-    const v = String(value || '');
-    if (v.includes('[)>') && /[\x1d\x1e\u241d\u241e]/.test(v)) return 'label';
-    if (/^[0-9A-Z]{8,}$/.test(v.replace(/[\s.\-\/%]/g, ''))) return 'tracking';
-    return 'other';
-  };
+  const classify = classifyScanCode;
 
   const handle = (code, format) => {
     const value = String(code || '').trim();
@@ -500,12 +811,29 @@ export function openScanner(stop, opts = {}) {
   let fallback = null;
   let fallbackTimer = null;
   let lastHint = 0;
+  let activeVideo = null;
+  let hardHunting = false;
+  let lastHardHunt = 0;
+  /* L'étiquette est dans le champ (suivi Code128 lu) mais l'Aztec n'est pas
+   * décodable en pleine frame → on relance une passe « difficile » (tuiles
+   * recadrées + upscale + binarisation) sur l'image vidéo courante. */
+  const huntLabelHard = () => {
+    if (hardHunting || !activeVideo || closed) return;
+    if (Date.now() - lastHardHunt < 3000) return;
+    lastHardHunt = Date.now();
+    hardHunting = true;
+    hardDecodeSource(activeVideo, { isLabel: (t) => classify(t) === 'label', budgetMs: 4000 })
+      .then((r) => { if (r?.label && !closed) handle(r.text, 'aztec'); })
+      .catch(() => {})
+      .finally(() => { hardHunting = false; });
+  };
   const onCode = (value, format) => {
     if (closed) return;
     const kind = classify(value);
     if (!preferLabel || kind === 'label') { handle(value, format); return; }
     if (kind === 'tracking') {
       fallback = { value, format };
+      huntLabelHard();
       status.innerHTML = '<span class="text-brand-600"><i class="fa-solid fa-magnifying-glass mr-1"></i> N° de suivi lu — je cherche encore le QR d’adresse, sinon je l’utiliserai dans quelques secondes.</span>';
       if (!fallbackTimer) fallbackTimer = setTimeout(() => { if (fallback) handle(fallback.value, fallback.format); }, LABEL_WAIT_MS);
       return;
@@ -561,6 +889,7 @@ export function openScanner(stop, opts = {}) {
     reader.innerHTML = '';
     reader.appendChild(video);
     video.srcObject = s;
+    activeVideo = video;
     setupTorch(s);
     return video;
   };
@@ -666,26 +995,12 @@ export function openScanner(stop, opts = {}) {
     try {
       const img = new Image();
       await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = url; });
-      const zx = new window.ZXing.BrowserMultiFormatReader();
-      let best = null;
-      for (const mult of [1, 1.5, 2]) {
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.min(2400, Math.round(img.width * mult));
-        canvas.height = Math.round(img.height * mult);
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        try {
-          const res = await zx.decodeFromCanvas(canvas);
-          if (res?.text) {
-            if (classify(res.text) === 'label') { best = res.text; break; }
-            best = best || res.text;
-          }
-        } catch {}
-        if (best && classify(best) === 'label') break;
-      }
+      /* Passe difficile : pleine-image puis tuiles recadrées × upscale ×
+       * binarisation — les Aztec petits des étiquettes Chronofresh ne sont
+       * jamais lus en pleine frame par zxing-js. */
+      const r = await hardDecodeSource(img, { isLabel: (t) => classify(t) === 'label', budgetMs: 12000 });
       URL.revokeObjectURL(url);
-      if (best) handle(best);
+      if (r) handle(r.text);
       else status.innerHTML = '<span class="text-amber-600">Aucun code lisible sur la photo — recadrez sur le QR de l’étiquette.</span>';
     } catch {
       URL.revokeObjectURL(url);

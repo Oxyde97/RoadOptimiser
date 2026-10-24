@@ -3,11 +3,13 @@
  * Cache de la coquille applicative + CDN pour un usage hors-ligne.
  */
 
-const VERSION = 'roadoptimizur-v5-8-2';
+const VERSION = 'roadoptimizur-v5-9-0';
 const CORE = [
   './',
   './index.html',
   './zxing.umd.js',
+  './zxing-wasm.iife.js',
+  './zxing_reader.wasm',
   './manifest.json',
   './manifest.webmanifest',
   './icons/icon-192.png',
