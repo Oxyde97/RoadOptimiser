@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><title>pod.js v5.9 e2e</title></head>
+<body><img id="i1" src="photo1.jpg" style="display:none"><img id="i2" src="photo2.jpg" style="display:none">
+<script src="zxing.umd.js"></script>
+<pre id="out">chargement…</pre>
+<script type="module">
+import { hardDecodeSource, classifyScanCode } from './pod.js';
+import { parseLabelPayload } from './storage.js';
+const out=[]; const log=(s)=>{out.push(s);document.getElementById('out').textContent=out.join('\n');};
+window.__result=null;
+async function waitImg(img){ if(img.complete&&img.naturalWidth) return; await new Promise(r=>{img.onload=r;img.onerror=()=>r();}); }
+async function run(img,name){
+  await waitImg(img);
+  const t0=Date.now();
+  const r = await hardDecodeSource(img, { isLabel:(t)=>classifyScanCode(t)==='label', budgetMs: 15000 });
+  const ms=Date.now()-t0;
+  if (!r) { log(`${name}: RIEN (${ms}ms)`); return null; }
+  const lbl = r.label ? parseLabelPayload(r.text) : null;
+  log(`${name}: label=${r.label} (${ms}ms) tracking=${lbl?.tracking||r.text.slice(0,26)} addr=${lbl?.fullAddress||'-'} dest=${lbl?.recipient?.company||lbl?.recipient?.name||'-'}`);
+  return r;
+}
+const r1 = await run(document.getElementById('i1'),'P1');
+const r2 = await run(document.getElementById('i2'),'P2');
+window.__result={p1:!!(r1&&r1.label),p2:!!(r2&&r2.label)};
+log('DONE ' + JSON.stringify(window.__result));
+</script></body></html>
